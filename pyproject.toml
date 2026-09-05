@@ -1,0 +1,17 @@
+[project]
+name = "book-log"
+version = "0.1.2"
+description = "本地书库：SQLite 元数据 + FastAPI 网页仪表盘，md 存正文，git 同步"
+requires-python = ">=3.9"
+dependencies = [
+    "fastapi>=0.110",
+    "pydantic>=2",
+    "uvicorn>=0.27",
+    "pyyaml>=6.0",
+]
+
+[dependency-groups]
+dev = [
+    "httpx>=0.26",
+    "pytest>=7.0",
+]

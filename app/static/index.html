@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>📚 书库</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/echarts.min.js"></script>
+<script src="/static/marked.min.js"></script>
+</head>
+<body class="viz-root">
+<header>
+  <nav>
+    <a href="#/">仪表盘</a>
+    <a href="#/books">书单</a>
+  </nav>
+  <div class="actions">
+    <button id="btn-sync" title="扫描 raw/ 与数据库对账">Sync</button>
+    <button id="btn-push" title="git add + commit + push">Commit &amp; Push</button>
+  </div>
+</header>
+<main id="view"></main>
+<pre id="toast"></pre>
+<script src="/static/app.js"></script>
+</body>
+</html>
