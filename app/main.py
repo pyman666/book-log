@@ -40,6 +40,7 @@ class BookIn(BaseModel):
     created: Optional[str] = None
     last_modified: Optional[str] = None
     file_path: Optional[str] = None
+    douban_id: Optional[str] = None
     authors: Optional[List[str]] = None
     publishers: Optional[List[str]] = None
     categories: Optional[List[str]] = None

@@ -121,3 +121,11 @@ def test_git_push_commits_changes(client, tmp_path):
                        capture_output=True, text=True).stdout.strip()
     assert n == "2"                                            # commit 成功（push 无 remote，ok=False 可接受）
     assert "git push" in r2["output"]
+
+def test_douban_id(client):
+    bid = client.post("/api/books", json={"title": "丙", "douban_id": "12345"}).json()
+    assert client.get(f"/api/books/{bid}").json()["douban_id"] == "12345"
+    assert client.get("/api/books").json()["items"][0]["douban_id"] == "12345"
+    # PUT 不带该字段时保留（老客户端不清空）；带空串时清空
+    assert client.put(f"/api/books/{bid}", json={"rating": 8}).json()["douban_id"] == "12345"
+    assert client.put(f"/api/books/{bid}", json={"douban_id": ""}).json()["douban_id"] is None

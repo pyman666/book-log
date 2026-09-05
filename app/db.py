@@ -19,7 +19,8 @@ CREATE TABLE IF NOT EXISTS books (
   status TEXT NOT NULL DEFAULT 'in_library',
   created TEXT,
   last_modified TEXT,
-  file_path TEXT,             -- "raw/书名.md"，售出书为 NULL
+  file_path TEXT,             -- "raw/书名.md"；同名同作者的多个版本/批次共用一个文件
+  douban_id TEXT,             -- 豆瓣 subject 号，前端拼 https://book.douban.com/subject/{id}/
   platform_id INTEGER REFERENCES platforms(id)
   -- category 为多对多（book_categories）：数据中 68 本书有多个分类
   -- 无唯一约束：售出书 created 同为 NULL，同书名多批次只能靠应用层规则去重
@@ -74,6 +75,9 @@ def db_conn(path):
 
 def init_db(conn):
     conn.executescript(SCHEMA)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(books)")}
+    if "douban_id" not in cols:  # 存量库迁移
+        conn.execute("ALTER TABLE books ADD COLUMN douban_id TEXT")
     conn.commit()
 
 
@@ -111,11 +115,11 @@ def _replace_m2m(conn, bid, b):
 def _apply(conn, bid, b):
     conn.execute(
         """UPDATE books SET isbn=?, price=?, importance=?, progress=?, rating=?, status=?,
-               created=?, last_modified=?, file_path=?, platform_id=?
+               created=?, last_modified=?, file_path=?, douban_id=?, platform_id=?
            WHERE id=?""",
         (b.get("isbn"), b.get("price"), b.get("importance"), b.get("progress"), b.get("rating"),
          b.get("status") or "in_library", b.get("created"), b.get("last_modified"),
-         b.get("file_path"), _dim(conn, "platforms", b.get("platform")), bid))
+         b.get("file_path"), b.get("douban_id") or None, _dim(conn, "platforms", b.get("platform")), bid))
     _replace_m2m(conn, bid, b)
     conn.commit()
 
@@ -141,11 +145,11 @@ def save_book(conn, b):
             return row["id"]
     cur = conn.execute(
         """INSERT INTO books (title, isbn, price, importance, progress, rating, status,
-                              created, last_modified, file_path, platform_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              created, last_modified, file_path, douban_id, platform_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (title, b.get("isbn"), b.get("price"), b.get("importance"), b.get("progress"),
          b.get("rating"), b.get("status") or "in_library", created, b.get("last_modified"),
-         b.get("file_path"), _dim(conn, "platforms", b.get("platform"))))
+         b.get("file_path"), b.get("douban_id") or None, _dim(conn, "platforms", b.get("platform"))))
     bid = cur.lastrowid
     _replace_m2m(conn, bid, b)
     conn.commit()
@@ -158,7 +162,7 @@ def _shape(conn, row):
         "id": bid, "title": row["title"], "isbn": row["isbn"], "price": row["price"],
         "importance": row["importance"], "progress": row["progress"], "rating": row["rating"],
         "status": row["status"], "created": row["created"], "last_modified": row["last_modified"],
-        "file_path": row["file_path"], "platform": row["platform"],
+        "file_path": row["file_path"], "douban_id": row["douban_id"], "platform": row["platform"],
         "authors": _names(conn, "book_authors", "authors", "authors", "author_id", bid),
         "publishers": _names(conn, "book_publishers", "publishers", "publishers", "publisher_id", bid),
         "categories": _names(conn, "book_categories", "categories", "categories", "category_id", bid),

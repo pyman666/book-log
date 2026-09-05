@@ -172,7 +172,7 @@ async function loadBooks() {
   const data = await api(`/api/books?${p}`);
   $("#tbl tbody").innerHTML = data.items.map(b => `
     <tr data-id="${b.id}">
-      <td class="title" onclick="location.hash='#/book/${b.id}'">${b.title}${b.status === "in_library" && !b.file_path ? '<span class="warn"> 无正文</span>' : ""}</td>
+      <td class="title" onclick="location.hash='#/book/${b.id}'">${b.title}${b.douban_id ? ` <a class="dbk" title="豆瓣" href="https://book.douban.com/subject/${b.douban_id}/" target="_blank" onclick="event.stopPropagation()">🌐</a>` : ""}${b.status === "in_library" && !b.file_path ? '<span class="warn"> 无正文</span>' : ""}</td>
       <td>${(b.authors || []).join("、") || "—"}</td>
       <td>${(b.categories || []).join("、") || "—"}</td>
       <td>${(b.publishers || []).join("、") || "—"}</td>
@@ -210,6 +210,7 @@ const BOOK_FIELDS = `
   <label>分类（逗号分隔）<input name="categories"></label>
   <label>平台<select name="platform"></select></label>
   <label>ISBN<input name="isbn"></label>
+  <label>豆瓣编号（subject 号，可空）<input name="douban_id" pattern="[0-9]*" title="只填数字"></label>
   <label>价格（正=亏 负=赚，空=无）<input name="price" type="number" step="0.01"></label>
   <label>进度（100读完/0未读/-1售出）<input name="progress" type="number"></label>
   <label>评分（1-10）<input name="rating" type="number" min="1" max="10"></label>
@@ -271,10 +272,13 @@ async function bookDetail(id) {
   const obs = b.file_path
     ? `<a class="obs" href="obsidian://open?vault=Books&file=${encodeURIComponent(b.file_path)}">📖 在 Obsidian 打开</a>`
     : "";
+  const dbk = b.douban_id
+    ? `<a class="obs" href="https://book.douban.com/subject/${b.douban_id}/" target="_blank" rel="noopener">🌐 豆瓣</a>`
+    : "";
   view.innerHTML = `
     <div class="detail">
       <section class="panel meta">
-        <h2>${b.title}${obs}</h2>
+        <h2>${b.title}${dbk}${obs}</h2>
         <form id="d-form">${BOOK_FIELDS}
           <div class="row"><button class="primary" type="submit">保存</button>
           <button class="danger" type="button" id="d-del">删除记录</button></div>
@@ -292,6 +296,7 @@ async function bookDetail(id) {
   el("categories").value = (b.categories || []).join("、");
   el("platform").value = b.platform || "";
   el("isbn").value = b.isbn || "";
+  el("douban_id").value = b.douban_id || "";
   el("price").value = b.price ?? "";
   el("progress").value = b.progress ?? "";
   el("rating").value = b.rating ?? "";

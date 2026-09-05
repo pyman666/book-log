@@ -78,3 +78,5 @@ td select.inline { width: auto; }
   background: var(--text-primary); color: var(--page); padding: 8px 16px; border-radius: 8px;
   font-size: 13px; max-width: 80vw; white-space: pre-wrap; z-index: 10; }
 #toast.err { background: var(--bad); color: #fff; }
+.dbk { font-size: 12px; text-decoration: none; opacity: .5; margin-left: 2px; }
+.dbk:hover { opacity: 1; }
