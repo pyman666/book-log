@@ -4,6 +4,7 @@
 - daily_counts(conn)    剁手/登记日历（GitHub 热力图）
 - taste_spectrum(conn)  口味光谱（StoryGraph 式三条堆叠 bar）
 - quadrant(conn)        评分 × 重要度象限（气泡=盈亏）
+- cover_wall(conn)      封面墙（只出 id/title/created/rating/cover_url 五字段）
 """
 import re
 from collections import defaultdict
@@ -95,3 +96,13 @@ def quadrant(conn):
                     "importance": r["importance"], "price": r["price"],
                     "cat": r["cat"] or "—", "douban_id": r["douban_id"]})
     return out
+
+
+def cover_wall(conn):
+    """封面墙：只返回前端需要的 5 字段（/api/books 全量 payload 对纯展示太肥）。
+    total = 全库本数（前端算"已抓封面 x/total"用）。"""
+    total = conn.execute("SELECT COUNT(*) FROM books").fetchone()[0]
+    rows = conn.execute(
+        "SELECT id, title, created, rating, cover_url FROM books "
+        "WHERE cover_url IS NOT NULL ORDER BY id").fetchall()
+    return {"total": total, "items": [dict(r) for r in rows]}

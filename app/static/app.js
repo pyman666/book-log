@@ -45,15 +45,16 @@ async function dashboard() {
   view.innerHTML = `
     <div class="cards" id="cards"></div>
     <div class="grid2">
-      <section class="panel wide"><h2>🛒 甸手日历（一天买几本）<select id="heat-year" class="inline right"></select></h2><div class="chart" id="ch-heat"></div></section>
-      <section class="panel"><h2>🎛 口味光谱</h2><div class="chart" id="ch-spectrum"></div></section>
-      <section class="panel"><h2>🎯 评分 × 重要度（气泡=盈亏，红=亏）</h2><div class="chart" id="ch-quadrant"></div></section>
+      <section class="panel wide"><h2>剁手日历（一天买几本）<select id="heat-year" class="inline right"></select></h2>
+        <div class="heat-wrap"><div class="chart" id="ch-heat"></div><div class="heat-stat" id="heat-stat"></div></div></section>
+      <section class="panel"><h2>口味光谱</h2><div id="spectrum-flags"></div><div class="chart" id="ch-spectrum"></div></section>
+      <section class="panel"><h2>评分 × 重要度（气泡=盈亏，红=亏）</h2><div class="chart" id="ch-quadrant"></div></section>
       <section class="panel"><h2>分类目净花费（元，红=亏 蓝=赚）</h2><div class="chart" id="ch-cat"></div></section>
       <section class="panel"><h2>年度读书量</h2><div class="chart" id="ch-year"></div></section>
       <section class="panel"><h2>作者分布（Top 10）</h2><div class="chart" id="ch-author"></div></section>
       <section class="panel"><h2>出版社分布（Top 10）</h2><div class="chart" id="ch-publisher"></div></section>
-      <section class="panel wide"><h2>🖼 封面墙 <select id="wall-year" class="inline right"></select><span id="wall-stat" class="sub right"></span></h2><div class="wall" id="wall"></div></section>
-      <section class="panel wide"><h2>🤖 AI 年度画像 <select id="ai-year" class="inline right"></select>
+      <section class="panel wide"><h2>封面墙 <select id="wall-year" class="inline right"></select><span id="wall-stat" class="sub right"></span></h2><div class="wall" id="wall"></div></section>
+      <section class="panel wide"><h2>AI 年度画像 <select id="ai-year" class="inline right"></select>
         <button id="ai-gen" class="ghost right">生成</button><button id="ai-refresh" class="ghost right" title="重新生成">↻</button></h2>
         <div id="ai-yearly" class="md"><span class="muted">点“生成”，AI 读完你那一年的书和笔记后给你画像（首次约半分钟）</span></div></section>
     </div>`;
@@ -128,65 +129,125 @@ async function panelHeatmap() {
   const years = [...new Set(Object.keys(daily).map(k => k.slice(0, 4)))].sort().reverse();
   const sel = $("#heat-year");
   sel.innerHTML = years.map(y => `<option>${y}</option>`).join("");
+  const c = bareChart($("#ch-heat"));   // 只建一次实例；换年只更新 option，避免重复 init 告警
   const draw = y => {
     const pts = Object.entries(daily).filter(([d]) => d.startsWith(y))
       .map(([d, v]) => [d, v.n, v.titles]);
-    bareChart($("#ch-heat")).setOption({
+    c.setOption({
       tooltip: { formatter: p => `${p.value[0]} · ${p.value[1]} 本<br>${p.value[2].join("、")}` },
       visualMap: { min: 1, max: Math.max(3, ...pts.map(p => p[1])), show: false,
-        inRange: { color: [cssVar("--grid"), cssVar("--series-2"), cssVar("--series-1")] } },
-      calendar: { range: +y, cellSize: [13, 13], left: 46, top: 30, right: 16,
+        inRange: { color: ["--heat-1", "--heat-2", "--heat-3", "--heat-4"].map(cssVar) } },
+      calendar: { range: +y, cellSize: [13, 13], left: "center", top: 30,
         itemStyle: { borderColor: cssVar("--page"), borderWidth: 2 },
         splitLine: { show: false },
         dayLabel: { color: cssVar("--muted"), fontSize: 10 },
         monthLabel: { color: cssVar("--muted"), fontSize: 10 },
         yearLabel: { show: false } },
       series: { type: "heatmap", coordinateSystem: "calendar", data: pts,
-        emphasis: { itemStyle: { shadowBlur: 6, shadowColor: cssVar("--series-1") } } } },
+        emphasis: { itemStyle: { shadowBlur: 6, shadowColor: cssVar("--series-1") } } },
+      animationDuration: 300, animationDurationUpdate: 250 },
     );
+    const n = pts.reduce((s, p) => s + p[1], 0);
+    const peak = pts.reduce((a, b) => (b[1] > (a ? a[1] : 0) ? b : a), null);
+    $("#heat-stat").innerHTML =
+      hstat("本年登记", n) + hstat("有购买的天数", pts.length) +
+      (peak ? hstat(`最狠一天 ${peak[0].slice(5)}`, `${peak[1]} 本`) : "");
   };
   sel.onchange = () => draw(sel.value);
   draw(years[0]);
 }
+const hstat = (k, v) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
+
+// 口味光谱 8-slot 分类色：style.css 的 --cat-*（固定顺序，validate_palette.js 双模式过检）
+const CAT = ["--cat-1", "--cat-2", "--cat-3", "--cat-4", "--cat-5", "--cat-6", "--cat-7", "--cat-8"];
 
 async function panelSpectrum() {
-  const axes = await api("/api/stats/spectrum");
+  // 纯读：spectrum 不再阻塞等 LLM；未判定时照常画（语言轴启发式兜底）+ 提示条给显式触发入口
+  const [axes, st] = await Promise.all([api("/api/stats/spectrum"), api("/api/ai/author-flags")]);
+  drawSpectrum(axes);
+  renderFlagsChip(st.pending);
+}
+
+function drawSpectrum(axes) {
+  const el = $("#ch-spectrum");
+  const old = echarts.getInstanceByDom(el);   // 重画（判定后刷新）时先 dispose，避免重复 init
+  if (old) { old.dispose(); charts.splice(charts.indexOf(old), 1); }
   const keys = [...new Set(axes.flatMap(a => a.segments.map(s => s.key)))];
-  baseChart($("#ch-spectrum")).setOption({
+  const totals = axes.map(a => a.segments.reduce((s, x) => s + x.value, 0));
+  const c = baseChart(el);
+  c.setOption({
+    color: keys.map((_, i) => cssVar(CAT[i % CAT.length])),
     legend: { bottom: 0, itemWidth: 12, itemHeight: 8, textStyle: { color: cssVar("--muted") } },
-    grid: { left: 8, right: 32, top: 12, bottom: 40, containLabel: true },
-    tooltip: { trigger: "axis", axisPointer: { type: "none" } },
-    xAxis: { type: "value" },
+    grid: { left: 8, right: 40, top: 12, bottom: 40, containLabel: true },
+    tooltip: { trigger: "axis", axisPointer: { type: "none" },
+      formatter: ps => ps.filter(p => p.value > 0 && p.seriesName)   // 排除末端的无名总数 bar
+        .map(p => `${p.marker}${p.seriesName}: ${Math.round(p.value)}`).join("<br>") },
+    xAxis: { type: "value", max: v => Math.ceil(v.max * 1.18) },
     yAxis: { type: "category", data: axes.map(a => a.axis),
       axisLabel: { color: cssVar("--text-secondary") } },
-    series: keys.map(k => ({
-      name: k, type: "bar", stack: "s", barWidth: 26,
-      data: axes.map(a => (a.segments.find(s => s.key === k) || { value: 0 }).value),
-      itemStyle: { borderRadius: 4 },
-      label: { show: true, color: "#fff", fontSize: 11, formatter: p => p.value ? Math.round(p.value) : "" } })),
+    series: [
+      ...keys.map(k => ({
+        name: k, type: "bar", stack: "s", barWidth: 26,
+        data: axes.map(a => (a.segments.find(s => s.key === k) || { value: 0 }).value),
+        itemStyle: { borderRadius: 3 } })),
+      // 选择性直标：只在每条 bar 末端标总数，分段精确值交给 tooltip
+      { type: "bar", stack: "s-total", barWidth: 1, silent: true, tooltip: { show: false },
+        data: totals, itemStyle: { color: "transparent" },
+        label: { show: true, position: "right", color: cssVar("--text-secondary"),
+          formatter: p => Math.round(p.value) } },
+    ],
   });
+}
+
+let flagsBusy = false;
+function renderFlagsChip(pending) {
+  const box = $("#spectrum-flags");
+  if (!pending) { box.innerHTML = ""; return; }
+  if (flagsBusy) {
+    box.innerHTML = `<div class="flag-chip"><span class="spin"></span><span class="muted">正在判定作者国籍…</span></div>`;
+    return;
+  }
+  box.innerHTML = `<div class="flag-chip"><span class="muted">${pending} 位作者国籍未判定（语言轴暂按启发式）</span>
+    <button class="ghost" id="flag-run">判定</button></div>`;
+  $("#flag-run").onclick = async () => {
+    flagsBusy = true; renderFlagsChip(pending);
+    let st;
+    try {
+      st = await api("/api/ai/author-flags", { method: "POST" });
+    } catch (e) {
+      toast(e.message, true);
+    } finally {
+      flagsBusy = false;
+    }
+    if (st) drawSpectrum(await api("/api/stats/spectrum"));   // 成功：语言轴换成 LLM 判定值
+    renderFlagsChip(st ? st.pending : pending);
+  };
 }
 
 async function panelQuadrant() {
   const pts = await api("/api/stats/quadrant");
-  const avg = k => pts.reduce((s, p) => s + p[k], 0) / pts.length;
+  const avg = k => pts.length ? pts.reduce((s, p) => s + p[k], 0) / pts.length : null;
   const [ar, ai] = [avg("rating"), avg("importance")];
   const c = baseChart($("#ch-quadrant"));
   c.setOption({
-    legend: { bottom: 0, itemWidth: 10, itemHeight: 10, textStyle: { color: cssVar("--muted") } },
-    grid: { left: 8, right: 30, top: 30, bottom: 40, containLabel: true },
-    tooltip: { formatter: p => `${p.data.title}\n评分 ${p.data.value[0]} · 重要度 ${p.data.value[1]}` +
-      (p.data.price != null ? `\n${p.data.price >= 0 ? "亏" : "赚"} ¥${Math.abs(p.data.price).toFixed(2)}` : "") },
-    xAxis: { type: "value", min: 0, max: 10, name: "评分", nameTextStyle: { color: cssVar("--muted") } },
+    grid: { left: 8, right: 30, top: 30, bottom: 24, containLabel: true },
+    tooltip: { confine: true,
+      formatter: p => `${p.data.title}\n评分 ${p.data.value[0]} · 重要度 ${p.data.value[1]}` +
+        (p.data.price != null ? `\n${p.data.price >= 0 ? "亏" : "赚"} ¥${Math.abs(p.data.price).toFixed(2)}` : "\n无价格") },
+    xAxis: { type: "value", min: 1, max: 10, name: "评分", nameTextStyle: { color: cssVar("--muted") } },
     yAxis: { type: "value", min: 0, max: 1, name: "重要度", nameTextStyle: { color: cssVar("--muted") } },
     series: [{
       type: "scatter",
       data: pts.map(p => ({ title: p.title, id: p.id, price: p.price,
         value: [p.rating, p.importance],
-        symbolSize: 8 + Math.sqrt(Math.abs(p.price || 0)) * 1.6,
-        itemStyle: { color: p.price != null && p.price < 0 ? cssVar("--div-neg") : cssVar("--div-pos"),
-          opacity: .75 } })),
-      markLine: { silent: true, symbol: "none", label: { color: cssVar("--muted"), fontSize: 10 },
+        symbolSize: 12 + Math.sqrt(Math.abs(p.price || 0)) * 1.5,
+        itemStyle: { opacity: .75,
+          // 无价格 = 中性灰（不读作亏损）；负=赚 蓝；正=亏 红
+          color: p.price == null ? cssVar("--muted")
+            : p.price < 0 ? cssVar("--div-neg") : cssVar("--div-pos") } })),
+      emphasis: { scale: 1.25 },
+      markLine: ar == null ? undefined : { silent: true, symbol: "none",
+        label: { color: cssVar("--muted"), fontSize: 10 },
         lineStyle: { type: "dashed", color: cssVar("--axis") },
         data: [{ xAxis: +ar.toFixed(1), label: "平均评分" }, { yAxis: +ai.toFixed(2), label: "平均重要度" }] } },
     ],
@@ -195,8 +256,8 @@ async function panelQuadrant() {
 }
 
 async function panelCovers() {
-  const data = await api("/api/books?page_size=500");
-  const withCover = data.items.filter(b => b.cover_url);
+  const data = await api("/api/stats/wall");
+  const withCover = data.items;
   $("#wall-stat").textContent = `已抓封面 ${withCover.length}/${data.total}`;
   const years = [...new Set(withCover.map(b => yearOf(b.created)))].filter(y => y !== "—").sort().reverse();
   const sel = $("#wall-year");
@@ -217,6 +278,7 @@ async function panelCovers() {
 async function panelYearlyAI() {
   const { years } = await api("/api/ai/yearly");
   const sel = $("#ai-year"), box = $("#ai-yearly");
+  const genBtn = $("#ai-gen"), refBtn = $("#ai-refresh");
   sel.innerHTML = years.map(y => `<option>${y}</option>`).join("");
   const show = y => {
     api(`/api/ai/yearly?year=${y}&pending=1`).then(r => r.text
@@ -224,13 +286,16 @@ async function panelYearlyAI() {
       : box.innerHTML = `<span class="muted">${y} 年尚未生成，点右上“生成”（首次约半分钟）</span>`);
   };
   const run = fresh => {
-    box.innerHTML = `<span class="muted">AI 正在重读你 ${sel.value} 年的书…</span>`;
-    api(`/api/ai/yearly?year=${sel.value}${fresh ? "&fresh=1" : ""}`).then(r => box.innerHTML = marked.parse(r.text))
-      .catch(e => box.innerHTML = `<span class="bad">${e.message}</span>`);
+    genBtn.disabled = refBtn.disabled = true;   // 生成中禁用，防连点并发两次模型调用
+    box.innerHTML = `<span class="muted"><span class="spin"></span>AI 正在重读你 ${sel.value} 年的书…</span>`;
+    api(`/api/ai/yearly?year=${sel.value}${fresh ? "&fresh=1" : ""}`)
+      .then(r => box.innerHTML = marked.parse(r.text))
+      .catch(e => box.innerHTML = `<span class="bad">${e.message}</span>`)
+      .finally(() => { genBtn.disabled = refBtn.disabled = false; });
   };
   sel.onchange = () => show(sel.value);
-  $("#ai-gen").onclick = () => run(0);
-  $("#ai-refresh").onclick = () => run(1);
+  genBtn.onclick = () => run(0);
+  refBtn.onclick = () => run(1);
   show(sel.value);
 }
 
@@ -395,10 +460,12 @@ async function bookDetail(id) {
   const dbk = b.douban_id
     ? `<a class="obs" href="https://book.douban.com/subject/${b.douban_id}/" target="_blank" rel="noopener">🌐 豆瓣</a>`
     : "";
+  const coverBtn = (b.douban_id && !b.cover_url)
+    ? `<button id="d-cover" class="ghost" type="button" title="从豆瓣抓封面">抓封面</button>` : "";
   view.innerHTML = `
     <div class="detail">
       <section class="panel meta">
-        <h2>${b.title}${dbk}${obs}</h2>
+        <h2>${b.title}${dbk}${obs}${coverBtn}</h2>
         <form id="d-form">${BOOK_FIELDS}
           <div class="row"><button class="primary" type="submit">保存</button>
           <button class="danger" type="button" id="d-del">删除记录</button></div>
@@ -407,15 +474,32 @@ async function bookDetail(id) {
       <section class="panel"><h2>正文</h2>
         <div class="md">${content ? marked.parse(content) : "<p class='muted'>无正文文件</p>"}</div>
       </section>
-      ${b.file_path ? `<section class="panel wide"><h2>🤖 AI 读后摘要 <button id="sum-refresh" class="ghost right" title="重新生成">↻</button></h2>
-        <div id="sum" class="md"><span class="muted">生成中…（首次约十几秒）</span></div></section>` : ""}
+      ${b.file_path ? `<section class="panel wide"><h2>AI 读后摘要 <button id="sum-refresh" class="ghost right" title="重新生成">↻</button></h2>
+        <div id="sum" class="md"><span class="muted"><span class="spin"></span>生成中…（首次约十几秒）</span></div></section>` : ""}
     </div>`;
+  if (b.douban_id && !b.cover_url) {
+    $("#d-cover").onclick = async () => {
+      const btn = $("#d-cover");
+      btn.disabled = true; btn.textContent = "抓取中…";
+      try {
+        await api(`/api/books/${id}/cover`, { method: "POST" });
+        btn.remove();   // 成功后按钮消失；回仪表盘封面墙即可见
+      } catch (e) {
+        btn.disabled = false; btn.textContent = "抓封面";
+        toast(e.message, true);
+      }
+    };
+  }
   if (b.file_path) {
     const sum = $("#sum");
-    const fetchSum = fresh =>
+    const fetchSum = fresh => {
+      const btn = $("#sum-refresh");
+      if (btn) btn.disabled = true;
       api(`/api/books/${id}/summary${fresh ? "?fresh=1" : ""}`)
         .then(r => sum.innerHTML = marked.parse(r.summary))
-        .catch(e => sum.innerHTML = `<span class="bad">${e.message}</span>`);
+        .catch(e => sum.innerHTML = `<span class="bad">${e.message}</span>`)
+        .finally(() => { const b2 = $("#sum-refresh"); if (b2) b2.disabled = false; });
+    };
     $("#sum-refresh").onclick = () => fetchSum(1);
     fetchSum(0);
   }

@@ -23,9 +23,12 @@ SMALL = re.compile(r"/(l|m)/public/")
 
 
 def fetch_cover_url(douban_id: str, timeout: float = 12) -> str:
-    """→ 小尺寸封面 URL；页面结构变化/被ban 时抛 RuntimeError。"""
-    r = httpx.get(f"https://book.douban.com/subject/{douban_id}/",
-                  headers=UA, timeout=timeout, follow_redirects=True)
+    """→ 小尺寸封面 URL；页面结构变化/被ban/网络错误 时抛 RuntimeError。"""
+    try:
+        r = httpx.get(f"https://book.douban.com/subject/{douban_id}/",
+                      headers=UA, timeout=timeout, follow_redirects=True)
+    except httpx.HTTPError as e:  # 超时/连接失败等统一成 RuntimeError，调用方只 catch 一种
+        raise RuntimeError(f"网络错误: {type(e).__name__}") from e
     if r.status_code in (403, 418) or r.status_code >= 500:
         raise RuntimeError(f"HTTP {r.status_code}")
     m = OG.search(r.text)
@@ -42,6 +45,7 @@ def backfill(db_path=DB_PATH, sleep=2.5, limit=None, max_abort=6):
         "SELECT id, douban_id FROM books WHERE douban_id IS NOT NULL "
         "AND cover_url IS NULL ORDER BY id").fetchall()
     rep = {"ok": 0, "fail": 0, "aborted": False, "todo": len(rows)}
+    fail_run = 0
     for i, r in enumerate(rows[:limit]):
         try:
             conn.execute("UPDATE books SET cover_url=? WHERE id=?",

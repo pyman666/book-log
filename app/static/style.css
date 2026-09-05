@@ -5,6 +5,13 @@
   --grid: #e1e0d9; --axis: #c3c2b7; --border: rgba(11, 11, 11, .10);
   --series-1: #2a78d6; --series-2: #1baf7a; --series-5: #4a3aa7;
   --div-pos: #e34948; --div-neg: #2a78d6;
+  /* 8-slot 分类色（口味光谱，固定顺序；validate_palette.js light+dark 全过，
+     light 下 #1baf7a 对比度 2.74:1 WARN 由 legend 文字名兜底） */
+  --cat-1: #2a78d6; --cat-2: #1baf7a; --cat-3: #4a3aa7; --cat-4: #e34948;
+  --cat-5: #d97706; --cat-6: #0d9488; --cat-7: #db2777; --cat-8: #65a30d;
+  /* 热力图单色 sequential（同 hue light→dark，4 级） */
+  --heat-1: #dce8f7; --heat-2: #b3cdee; --heat-3: #7fabe2; --heat-4: #2a78d6;
+  --star: #a16207;   /* 封面墙星级（11px 文本，深底需 ≥4.5:1，故比装饰色深） */
   --good: #006300; --bad: #d03b3b;
 }
 @media (prefers-color-scheme: dark) {
@@ -14,6 +21,11 @@
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, .10);
     --series-1: #3987e5; --series-2: #199e70; --series-5: #9085e9;
     --div-pos: #e66767; --div-neg: #3987e5;
+    --cat-1: #3987e5; --cat-2: #199e70; --cat-3: #9085e9; --cat-4: #e66767;
+    /* 新增 4 slot 明度居中，light/dark 同值即双模式可用（validator dark 全过） */
+    --cat-5: #d97706; --cat-6: #0d9488; --cat-7: #db2777; --cat-8: #65a30d;
+    --heat-1: #14212f; --heat-2: #1c3557; --heat-3: #2a5a9c; --heat-4: #3987e5;
+    --star: #fbbf24;
     --good: #0ca30c; --bad: #d03b3b;
   }
 }
@@ -84,22 +96,47 @@ td select.inline { width: auto; }
 /* ---------- 仪表盘增强面板 ---------- */
 .grid2 .wide, .detail .wide { grid-column: 1 / -1; }
 .panel h2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+/* 看板面板标题：13px/600/muted 与正文拉开层次（详情页书名 h2 保持原样） */
+.grid2 > .panel > h2, .detail .wide > h2 { font-size: 13px; font-weight: 600;
+  color: var(--muted); letter-spacing: .02em; }
 .panel h2 .right { margin-left: auto; }
 .panel h2 .right + .right { margin-left: 0; }
 .panel h2 select.inline { font-size: 12px; padding: 2px 6px; }
 .bad { color: var(--bad); }
+/* 口味光谱：作者国籍未判定时的提示条（显式触发入口） */
+.flag-chip { display: flex; align-items: center; gap: 8px; margin: -2px 0 8px; font-size: 12px; }
 button.ghost { background: none; border: 1px solid var(--border); color: var(--text-secondary);
   border-radius: 6px; font-size: 12px; padding: 2px 10px; cursor: pointer; }
 button.ghost:hover { border-color: var(--text-secondary); }
-#ch-heat { height: 170px; }
+
+/* 剁手日历：图 + 右侧年度小统计（吃掉 wide 面板的右留白） */
+.heat-wrap { display: flex; gap: 16px; align-items: flex-start; }
+#ch-heat { height: 170px; flex: 1; min-width: 0; }
+.heat-stat { display: flex; flex-direction: column; gap: 10px; padding-top: 32px; min-width: 132px; }
+.heat-stat .k { color: var(--muted); font-size: 11px; }
+.heat-stat .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* 封面墙 */
 .wall { display: grid; grid-template-columns: repeat(auto-fill, minmax(92px, 1fr)); gap: 12px; margin-top: 6px; }
 .wall figure { margin: 0; cursor: pointer; transition: transform .15s ease, opacity .3s; }
 .wall figure:hover { transform: translateY(-3px) scale(1.04); z-index: 1; position: relative; }
-.wall img { width: 100%; height: 132px; object-fit: cover; display: block; border-radius: 4px;
+/* contain 不裁封面（cover 会切掉书封顶部的书名）；2:3 统一书封比例 */
+.wall img { width: 100%; aspect-ratio: 2 / 3; object-fit: contain; display: block; border-radius: 4px;
   box-shadow: 0 2px 10px rgba(0,0,0,.28); background: var(--surface-1); }
 .wall figcaption { display: flex; justify-content: space-between; gap: 4px; font-size: 11px;
   color: var(--text-secondary); margin-top: 3px; }
 .wall .wt { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.wall .wr { color: #e8a33d; flex-shrink: 0; }
+.wall .wr { color: var(--star); flex-shrink: 0; }
+
+/* ---------- 动效 ---------- */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@keyframes spin { to { transform: rotate(360deg); } }
+.cards, .grid2 > .panel { animation: fadeUp .25s ease both; }
+.spin { display: inline-block; width: 11px; height: 11px; margin-right: 6px; vertical-align: -1px;
+  border: 2px solid var(--border); border-top-color: var(--muted); border-radius: 50%;
+  animation: spin .8s linear infinite; }
+@media (max-width: 800px) { .heat-wrap { flex-direction: column; } }
+@media (prefers-reduced-motion: reduce) {
+  .cards, .grid2 > .panel, .spin { animation: none; }
+  .wall figure { transition: none; }
+}

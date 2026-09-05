@@ -145,9 +145,7 @@ def test_stats_daily(client):
     assert set(d) == {"2024-04-27", "2023-01-05"}
     assert d["2024-04-27"]["n"] == 2 and "活着" in d["2024-04-27"]["titles"]
 
-def test_stats_spectrum(client, monkeypatch):
-    from app.ai import gen
-    monkeypatch.setattr(gen, "ensure_author_flags", lambda conn: None)  # 测试不打 LLM，走启发式兜底
+def test_stats_spectrum(client):
     _seed(client)
     sp = {a["axis"]: {s["key"]: s["value"] for s in a["segments"]}
           for a in client.get("/api/stats/spectrum").json()}
@@ -189,20 +187,80 @@ def test_yearly_endpoint(client, monkeypatch):
     client.get("/api/ai/yearly", params={"year": 2024})
     assert len(calls) == 1                          # 缓存后不再调模型
 
-def test_author_flags_fallback(client):
+def test_author_flags_fallback(client, monkeypatch):
+    """LLM 调用失败 → 抛错（路由 502 / CLI 退出码 1）且不写库（chinese 保持 NULL），重新触发即重试。"""
     from app import db as dbmod
     from app.ai import gen
     def boom(msgs, **kw): raise RuntimeError("断网")
-    orig, gen.llm.chat = gen.llm.chat, boom
+    monkeypatch.setattr(gen.llm, "chat", boom)
     _seed(client)
-    try:
-        with dbmod.db_conn(client.app.state.db_path) as c:
+    with dbmod.db_conn(client.app.state.db_path) as c:
+        with pytest.raises(RuntimeError):
             gen.ensure_author_flags(c)
-    finally:
-        gen.llm.chat = orig
     with dbmod.db_conn(client.app.state.db_path) as c:
         flags = dict(c.execute("SELECT name, chinese FROM authors").fetchall())
-    assert flags["余华"] == 1 and flags["阿尔贝·加缪"] == 0
+    assert flags and all(v is None for v in flags.values())
+
+def test_author_flags_llm_success(client, monkeypatch):
+    """LLM 正常返回 → 判定结果落库，返回判定条数。"""
+    from app import db as dbmod
+    from app.ai import gen
+    monkeypatch.setattr(gen.llm, "chat",
+                        lambda msgs, **kw: '[{"name":"余华","cn":1},{"name":"阿尔贝·加缪","cn":0},'
+                                           '{"name":"宝春溪","cn":1}]')
+    _seed(client)
+    with dbmod.db_conn(client.app.state.db_path) as c:
+        judged = gen.ensure_author_flags(c)
+    assert judged == 3
+    with dbmod.db_conn(client.app.state.db_path) as c:
+        flags = dict(c.execute("SELECT name, chinese FROM authors").fetchall())
+    assert flags == {"余华": 1, "阿尔贝·加缪": 0, "宝春溪": 1}
+
+def test_author_flags_routes(client, monkeypatch):
+    from app import db as dbmod
+    from app.ai import gen
+    _seed(client)
+    # 状态：3 位作者全部未判定
+    assert client.get("/api/ai/author-flags").json() == {"total": 3, "pending": 3}
+    # 断网 → POST 502，不写库
+    def boom(msgs, **kw): raise RuntimeError("断网")
+    monkeypatch.setattr(gen.llm, "chat", boom)
+    assert client.post("/api/ai/author-flags").status_code == 502
+    assert client.get("/api/ai/author-flags").json()["pending"] == 3
+    # 成功 → judged + pending 归零；再 POST 幂等（无 pending，不调模型）
+    calls = []
+    monkeypatch.setattr(gen.llm, "chat",
+                        lambda msgs, **kw: calls.append(1) or
+                        '[{"name":"余华","cn":1},{"name":"阿尔贝·加缪","cn":0},{"name":"宝春溪","cn":1}]')
+    assert client.post("/api/ai/author-flags").json() == {"total": 3, "pending": 0, "judged": 3}
+    assert client.post("/api/ai/author-flags").json()["judged"] == 0
+    assert len(calls) == 1
+
+def test_spectrum_is_pure_read(client, monkeypatch):
+    """spectrum 不再触发判定：无 LLM 也直接 200（语言轴按调用启发式兜底），且不写库。"""
+    from app import db as dbmod
+    from app.ai import gen
+    def boom(msgs, **kw): raise RuntimeError("断网")
+    monkeypatch.setattr(gen.llm, "chat", boom)
+    _seed(client)
+    sp = client.get("/api/stats/spectrum")
+    assert sp.status_code == 200 and len(sp.json()) == 3
+    with dbmod.db_conn(client.app.state.db_path) as c:
+        flags = dict(c.execute("SELECT name, chinese FROM authors").fetchall())
+    assert all(v is None for v in flags.values())
+
+def test_cli_flags_no_pending(tmp_path):
+    """CLI python -m app.ai.gen --flags：无 pending 时不调模型、正常退出（--db 指向临时库，不碰真库）。"""
+    import json, subprocess, sys
+    from pathlib import Path
+    from app import db as dbmod
+    dbp = tmp_path / "cli.db"
+    with dbmod.db_conn(dbp) as c:
+        dbmod.init_db(c)
+    r = subprocess.run([sys.executable, "-m", "app.ai.gen", "--flags", "--db", str(dbp)],
+                       capture_output=True, text=True, cwd=Path(__file__).parent.parent)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == {"ok": True, "judged": 0, "total": 0, "pending": 0}
 
 def test_cover_endpoint(client, monkeypatch):
     import app.douban as dmod
@@ -212,3 +270,38 @@ def test_cover_endpoint(client, monkeypatch):
     b1 = client.post("/api/books", json={"title": "有豆瓣号", "douban_id": "999"}).json()
     assert client.post(f"/api/books/{b1}/cover").json() == {"cover_url": "//c999"}
     assert client.get(f"/api/books/{b1}").json()["cover_url"] == "//c999"
+
+def test_cover_network_error_is_502(client, monkeypatch):
+    """httpx 网络异常（超时/断连）被包成 RuntimeError → 路由 502，而不是裸 500。"""
+    import httpx
+    import app.douban as dmod
+    def neterr(*a, **k): raise httpx.ConnectError("断网")
+    monkeypatch.setattr(dmod.httpx, "get", neterr)
+    b1 = client.post("/api/books", json={"title": "有豆瓣号", "douban_id": "999"}).json()
+    assert client.post(f"/api/books/{b1}/cover").status_code == 502
+
+def test_wall_endpoint(client, monkeypatch):
+    import app.douban as dmod
+    monkeypatch.setattr(dmod, "fetch_cover_url", lambda i, **k: f"//c{i}")
+    b1 = client.post("/api/books", json={"title": "有封面", "douban_id": "1", "rating": 9,
+                                         "created": "April 27, 2024 11:32 AM"}).json()
+    client.post(f"/api/books/{b1}/cover")
+    client.post("/api/books", json={"title": "无封面"})
+    w = client.get("/api/stats/wall").json()
+    assert w["total"] == 2                                   # total 是全库本数
+    assert [i["id"] for i in w["items"]] == [b1]             # items 只含有封面的
+    assert set(w["items"][0]) == {"id", "title", "created", "rating", "cover_url"}
+    assert w["items"][0]["cover_url"] == "//c1"
+
+def test_yearly_reads_from_app_root(client, tmp_path, monkeypatch):
+    """年度画像的笔记摘录必须读注入的 vault root（create_app 的 root 参数），不是硬编码路径。"""
+    from app.ai import gen
+    prompts = []
+    def fake(msgs, **kw):
+        prompts.append(msgs[-1]["content"]); return "画像文本"
+    monkeypatch.setattr(gen.llm, "chat", fake)
+    (tmp_path / "raw" / "根探针笔记.md").write_text("探针内容:只存在于测试 vault", encoding="utf-8")
+    client.post("/api/books", json={"title": "根探针", "file_path": "raw/根探针笔记.md",
+                                    "created": "April 27, 2024 11:32 AM"})
+    assert client.get("/api/ai/yearly", params={"year": 2024}).status_code == 200
+    assert "探针内容:只存在于测试 vault" in prompts[0]

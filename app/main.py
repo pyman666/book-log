@@ -169,7 +169,7 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
                 conn.execute("DELETE FROM ai_cache WHERE key = ?", (f"yearly:{year}",))
                 conn.commit()
             try:
-                return gen.yearly_portrait(conn, year)
+                return gen.yearly_portrait(conn, request.app.state.root, year)
             except ValueError as e:
                 raise HTTPException(404, str(e))
             except Exception as e:
@@ -204,13 +204,32 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
     @app.get("/api/stats/spectrum")
     def stats_spectrum(request: Request):
         with conn_of(request) as conn:
-            gen.ensure_author_flags(conn)  # 首次调一次 LLM 判定作者国籍，之后纯读
-            return analytics.taste_spectrum(conn)
+            return analytics.taste_spectrum(conn)   # 纯读；国籍判定显式触发，见 /api/ai/author-flags
+
+    @app.get("/api/ai/author-flags")
+    def author_flags_status(request: Request):
+        with conn_of(request) as conn:
+            return gen.flag_status(conn)
+
+    @app.post("/api/ai/author-flags")
+    def author_flags_run(request: Request):
+        with conn_of(request) as conn:
+            try:
+                judged = gen.ensure_author_flags(conn)
+            except Exception as e:
+                raise HTTPException(502, f"模型调用失败: {type(e).__name__}: {e}")
+            return {**gen.flag_status(conn), "judged": judged}
 
     @app.get("/api/stats/quadrant")
     def stats_quadrant(request: Request):
         with conn_of(request) as conn:
             return analytics.quadrant(conn)
+
+    @app.get("/api/stats/wall")
+    def stats_wall(request: Request):
+        """封面墙轻量端点：只出前端需要的 5 个字段，不带 authors/categories 全量 payload。"""
+        with conn_of(request) as conn:
+            return analytics.cover_wall(conn)
 
     @app.post("/api/books/{bid}/cover")
     def book_cover_fill(request: Request, bid: int):
