@@ -4,7 +4,7 @@ import sqlite3
 from contextlib import contextmanager
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+CREATE TABLE IF NOT EXISTS authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, chinese INTEGER);
 CREATE TABLE IF NOT EXISTS publishers (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS platforms (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
@@ -21,9 +21,17 @@ CREATE TABLE IF NOT EXISTS books (
   last_modified TEXT,
   file_path TEXT,             -- "raw/书名.md"；同名同作者的多个版本/批次共用一个文件
   douban_id TEXT,             -- 豆瓣 subject 号，前端拼 https://book.douban.com/subject/{id}/
+  cover_url TEXT,             -- 豆瓣封面图 URL（app.douban 抓取，可空）
   platform_id INTEGER REFERENCES platforms(id)
   -- category 为多对多（book_categories）：数据中 68 本书有多个分类
   -- 无唯一约束：售出书 created 同为 NULL，同书名多批次只能靠应用层规则去重
+);
+CREATE TABLE IF NOT EXISTS ai_cache (
+  key TEXT PRIMARY KEY,        -- 书名文件路径 或 "yearly:<年>"
+  mtime TEXT,                  -- 源文件 mtime（失效判断）；年度画像为 NULL
+  model TEXT,
+  text TEXT NOT NULL,
+  updated TEXT
 );
 CREATE TABLE IF NOT EXISTS book_authors (
   book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
@@ -61,6 +69,7 @@ def get_db(path):
     conn = sqlite3.connect(str(path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.create_function("year_of", 1, year_of)   # 所有连接共享的 SQL 函数
     return conn
 
 
@@ -78,6 +87,11 @@ def init_db(conn):
     cols = {r[1] for r in conn.execute("PRAGMA table_info(books)")}
     if "douban_id" not in cols:  # 存量库迁移
         conn.execute("ALTER TABLE books ADD COLUMN douban_id TEXT")
+    if "cover_url" not in cols:
+        conn.execute("ALTER TABLE books ADD COLUMN cover_url TEXT")
+    acols = {r[1] for r in conn.execute("PRAGMA table_info(authors)")}
+    if "chinese" not in acols:  # 作者国籍（app.ai.gen.ensure_author_flags 填充）
+        conn.execute("ALTER TABLE authors ADD COLUMN chinese INTEGER")
     conn.commit()
 
 
@@ -162,7 +176,8 @@ def _shape(conn, row):
         "id": bid, "title": row["title"], "isbn": row["isbn"], "price": row["price"],
         "importance": row["importance"], "progress": row["progress"], "rating": row["rating"],
         "status": row["status"], "created": row["created"], "last_modified": row["last_modified"],
-        "file_path": row["file_path"], "douban_id": row["douban_id"], "platform": row["platform"],
+        "file_path": row["file_path"], "douban_id": row["douban_id"], "cover_url": row["cover_url"],
+        "platform": row["platform"],
         "authors": _names(conn, "book_authors", "authors", "authors", "author_id", bid),
         "publishers": _names(conn, "book_publishers", "publishers", "publishers", "publisher_id", bid),
         "categories": _names(conn, "book_categories", "categories", "categories", "category_id", bid),
@@ -187,12 +202,14 @@ def update_book(conn, bid, fields):
 
 
 def list_books(conn, q=None, category=None, author=None, publisher=None, platform=None,
-               status=None, min_price=None, max_price=None, min_rating=None,
+               status=None, min_price=None, max_price=None, min_rating=None, year=None,
                sort="id", desc=False, page=1, page_size=50):
     where, args = ["1=1"], []
     if q:
         where.append("(b.title LIKE ? OR b.isbn = ?)")
         args += [f"%{q}%", q]
+    if year:
+        where.append("year_of(b.created) = ?"); args.append(year)
     if platform:
         where.append("f.name = ?"); args.append(platform)
     if status:
@@ -263,8 +280,6 @@ def stats_group(conn, by, agg="count"):
         "year": "SELECT b.id, b.price, b.rating, year_of(b.created) AS key FROM books b",
         "rating": "SELECT b.id, b.price, b.rating, b.rating AS key FROM books b",
     }[by]
-    if by == "year":
-        conn.create_function("year_of", 1, year_of)
     default_label = {"rating": "未评分", "year": "未知"}.get(by, "未分类")
     groups = {}
     for r in conn.execute(src):

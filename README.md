@@ -34,6 +34,17 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 - 分类/作者/出版社可多个（逗号分隔）；平台单值
 - 新增 md 后点一次 Sync，数据库会自动建存根记录
 
+## 仪表盘 & AI
+
+后端三块，互不依赖，可单测（全部有测试覆盖）：
+
+- **`app/analytics.py`** — 只读纯聚合：`daily_counts`（剁手日历）、`taste_spectrum`（口味光谱三轴）、`quadrant`（评分×重要度）。路由零加工直出。
+- **`app/douban.py`** — 豆瓣封面抓取（og:image → `books.cover_url`）。批量：`uv run python -m app.douban`（限速+抖动+连续 6 败刹车，可反复重跑续传）；单本按需：`POST /api/books/{id}/cover`。图片 CDN 校验 Referer，浏览器 <img> 直连没问题。
+- **`app/ai/`** — DashScope Qwen（OpenAI 兼容 SDK）。`llm.py` 只管 chat()（key 读 bosch-ai-framework/.env 的 DASHSCOPE_API_KEY，不入库不入 git）；`gen.py` 管缓存（`ai_cache` 表：笔记按 file_path+mtime 失效，年度按 `yearly:<年>`）与提示词。
+  - `GET /api/books/{id}/summary[?fresh=1]` 单本 AI 读后摘要
+  - `GET /api/ai/yearly?year=N[&fresh=1|&pending=1]` 年度画像；pending=1 只查缓存不生成
+  - 作者国籍判定 `ensure_author_flags`：首次访问口味光谱时一把 LLM 批量判定 232 个作者 → `authors.chinese`，断网退启发式，不再重复调用
+
 ## 目录与存档
 
 - `raw/*.md` —— 有笔记的书（93 个文件），Obsidian 直接编辑
@@ -47,6 +58,13 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 保留较新设备的那份（`git checkout --theirs books.db`），解决后提交。
 万一数据损坏，可从 `raw/` + `raw/notion-export/` 恢复源文件后
 `python -m app.migrate --force` 重建。
+
+## 常用命令
+
+```bash
+uv run python -m app.douban          # 补全缺失封面（幂等，可中断续跑）
+uv run pytest -q                     # 40 测试，全离线（LLM/抓取均 monkeypatch）
+```
 
 ## 一次性脚本（已执行，留档备查）
 

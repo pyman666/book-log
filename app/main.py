@@ -12,6 +12,8 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from . import db as dbmod
+from . import analytics, douban
+from .ai import gen
 from .sync import sync_vault
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -74,13 +76,14 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
                    author: Optional[str] = None, publisher: Optional[str] = None,
                    platform: Optional[str] = None, status: Optional[str] = None,
                    min_price: Optional[float] = None, max_price: Optional[float] = None,
-                   min_rating: Optional[int] = None, sort: str = "id", desc: bool = False,
-                   page: int = 1, page_size: int = Query(50, le=200)):
+                   min_rating: Optional[int] = None, year: Optional[int] = None,
+                   sort: str = "id", desc: bool = False,
+                   page: int = 1, page_size: int = Query(50, le=500)):
         with conn_of(request) as conn:
             return dbmod.list_books(conn, q=q, category=category, author=author,
                                     publisher=publisher, platform=platform, status=status,
                                     min_price=min_price, max_price=max_price,
-                                    min_rating=min_rating, sort=sort, desc=desc,
+                                    min_rating=min_rating, year=year, sort=sort, desc=desc,
                                     page=page, page_size=page_size)
 
     @app.post("/api/books")
@@ -134,6 +137,44 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
             raise HTTPException(404, "无正文")   # 只有豆瓣头/空文件，视为无自己的笔记
         return body
 
+    # ---------- AI ----------
+    @app.get("/api/books/{bid}/summary")
+    def get_summary(request: Request, bid: int, fresh: int = 0):
+        with conn_of(request) as conn:
+            b = dbmod.get_book(conn, bid)
+            if not b:
+                raise HTTPException(404, "不存在")
+            if fresh:
+                conn.execute("DELETE FROM ai_cache WHERE key = ?", (b["file_path"],))
+                conn.commit()
+            try:
+                return gen.summarize_book(conn, request.app.state.root, b)
+            except ValueError as e:
+                raise HTTPException(404, str(e))
+            except Exception as e:
+                raise HTTPException(502, f"模型调用失败: {type(e).__name__}: {e}")
+
+    @app.get("/api/ai/yearly")
+    def get_yearly(request: Request, year: int = 0, fresh: int = 0, pending: int = 0):
+        with conn_of(request) as conn:
+            years = [r[0] for r in conn.execute(
+                "SELECT DISTINCT year_of(created) y FROM books WHERE created IS NOT NULL "
+                "ORDER BY y DESC") if r[0]]
+            if not year:
+                return {"years": years}
+            if pending:  # 只查缓存，不触发生成（前端初始化用）
+                text = gen.cache_get(conn, f"yearly:{year}")
+                return {"text": text, "cached": text is not None}
+            if fresh:
+                conn.execute("DELETE FROM ai_cache WHERE key = ?", (f"yearly:{year}",))
+                conn.commit()
+            try:
+                return gen.yearly_portrait(conn, year)
+            except ValueError as e:
+                raise HTTPException(404, str(e))
+            except Exception as e:
+                raise HTTPException(502, f"模型调用失败: {type(e).__name__}: {e}")
+
     # ---------- 筛选维度 ----------
     @app.get("/api/facets")
     def facets(request: Request):
@@ -153,6 +194,40 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
                 return dbmod.stats_group(conn, by, agg)
             except (KeyError, ValueError):
                 raise HTTPException(400, "by/agg 参数无效")
+
+    # ---------- 仪表盘分析（analytics.py 纯聚合） ----------
+    @app.get("/api/stats/daily")
+    def stats_daily(request: Request):
+        with conn_of(request) as conn:
+            return analytics.daily_counts(conn)
+
+    @app.get("/api/stats/spectrum")
+    def stats_spectrum(request: Request):
+        with conn_of(request) as conn:
+            gen.ensure_author_flags(conn)  # 首次调一次 LLM 判定作者国籍，之后纯读
+            return analytics.taste_spectrum(conn)
+
+    @app.get("/api/stats/quadrant")
+    def stats_quadrant(request: Request):
+        with conn_of(request) as conn:
+            return analytics.quadrant(conn)
+
+    @app.post("/api/books/{bid}/cover")
+    def book_cover_fill(request: Request, bid: int):
+        """新书单本补封面（批量补跑 python -m app.douban）。"""
+        with conn_of(request) as conn:
+            row = conn.execute("SELECT douban_id, cover_url FROM books WHERE id = ?", (bid,)).fetchone()
+            if not row:
+                raise HTTPException(404, "不存在")
+            if not row["douban_id"]:
+                raise HTTPException(400, "无豆瓣号，无法抓封面")
+            try:
+                url = douban.fetch_cover_url(row["douban_id"])
+            except RuntimeError as e:
+                raise HTTPException(502, str(e))
+            conn.execute("UPDATE books SET cover_url = ? WHERE id = ?", (url, bid))
+            conn.commit()
+            return {"cover_url": url}
 
     # ---------- sync & git ----------
     @app.post("/api/sync")

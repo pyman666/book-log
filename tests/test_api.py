@@ -129,3 +129,86 @@ def test_douban_id(client):
     # PUT 不带该字段时保留（老客户端不清空）；带空串时清空
     assert client.put(f"/api/books/{bid}", json={"rating": 8}).json()["douban_id"] == "12345"
     assert client.put(f"/api/books/{bid}", json={"douban_id": ""}).json()["douban_id"] is None
+
+# ---------- 仪表盘分析 ----------
+def _seed(client):
+    client.post("/api/books", json={"title": "活着", "authors": ["余华"], "categories": ["长篇"],
+        "rating": 9, "importance": 0.9, "price": 50, "created": "April 27, 2024 11:32 AM"})
+    client.post("/api/books", json={"title": "局外人", "authors": ["阿尔贝·加缪"], "categories": ["长篇"],
+        "rating": 8, "importance": 0.5, "price": -20, "created": "January 5, 2023 9:00 AM"})
+    client.post("/api/books", json={"title": "八月HALF", "authors": ["宝春溪"], "categories": ["传记"],
+        "rating": 7, "importance": 0.8, "price": 40, "created": "April 27, 2024 11:32 AM"})
+
+def test_stats_daily(client):
+    _seed(client)
+    d = client.get("/api/stats/daily").json()
+    assert set(d) == {"2024-04-27", "2023-01-05"}
+    assert d["2024-04-27"]["n"] == 2 and "活着" in d["2024-04-27"]["titles"]
+
+def test_stats_spectrum(client, monkeypatch):
+    from app.ai import gen
+    monkeypatch.setattr(gen, "ensure_author_flags", lambda conn: None)  # 测试不打 LLM，走启发式兜底
+    _seed(client)
+    sp = {a["axis"]: {s["key"]: s["value"] for s in a["segments"]}
+          for a in client.get("/api/stats/spectrum").json()}
+    assert sp["读什么"]["小说·戏剧"] == 2 and sp["读什么"]["思想·人文·实用"] == 1
+    assert sp["语言"]["原创"] == 2 and sp["语言"]["翻译"] == 1
+    assert sp["读完没"]["未读"] == 3
+
+def test_stats_quadrant(client):
+    _seed(client)
+    q = client.get("/api/stats/quadrant").json()
+    assert len(q) == 3 and all({"rating", "importance", "price"} <= set(p) for p in q)
+
+def test_list_year_filter(client):
+    _seed(client)
+    assert client.get("/api/books", params={"year": 2024}).json()["total"] == 2
+    assert client.get("/api/books", params={"year": 2023}).json()["total"] == 1
+
+# ---------- AI ----------
+def test_summary_endpoint(client, tmp_path, monkeypatch):
+    from app.ai import gen
+    monkeypatch.setattr(gen.llm, "chat", lambda msgs, **kw: "一句话摘要。")
+    (tmp_path / "raw" / "活着.md").write_text("福贵的一生…", encoding="utf-8")
+    bid = client.post("/api/books", json={"title": "活着", "file_path": "raw/活着.md"}).json()
+    assert client.get(f"/api/books/{bid}/summary").json() == {"summary": "一句话摘要。", "cached": False}
+    assert client.get(f"/api/books/{bid}/summary").json()["cached"] is True   # 命中缓存
+    bno = client.post("/api/books", json={"title": "无笔记"}).json()
+    assert client.get(f"/api/books/{bno}/summary").status_code == 404
+
+def test_yearly_endpoint(client, monkeypatch):
+    from app.ai import gen
+    calls = []
+    monkeypatch.setattr(gen.llm, "chat", lambda msgs, **kw: calls.append(1) or "画像文本")
+    _seed(client)
+    assert client.get("/api/ai/yearly").json()["years"] == [2024, 2023]
+    assert client.get("/api/ai/yearly", params={"year": 2024, "pending": 1}).json()["text"] is None
+    assert client.get("/api/ai/yearly", params={"year": 2024}).json()["text"] == "画像文本"
+    assert client.get("/api/ai/yearly", params={"year": 2024, "pending": 1}).json()["cached"] is True
+    assert len(calls) == 1                          # pending 查询不触发生成
+    client.get("/api/ai/yearly", params={"year": 2024})
+    assert len(calls) == 1                          # 缓存后不再调模型
+
+def test_author_flags_fallback(client):
+    from app import db as dbmod
+    from app.ai import gen
+    def boom(msgs, **kw): raise RuntimeError("断网")
+    orig, gen.llm.chat = gen.llm.chat, boom
+    _seed(client)
+    try:
+        with dbmod.db_conn(client.app.state.db_path) as c:
+            gen.ensure_author_flags(c)
+    finally:
+        gen.llm.chat = orig
+    with dbmod.db_conn(client.app.state.db_path) as c:
+        flags = dict(c.execute("SELECT name, chinese FROM authors").fetchall())
+    assert flags["余华"] == 1 and flags["阿尔贝·加缪"] == 0
+
+def test_cover_endpoint(client, monkeypatch):
+    import app.douban as dmod
+    monkeypatch.setattr(dmod, "fetch_cover_url", lambda i, **k: f"//c{i}")
+    b0 = client.post("/api/books", json={"title": "无豆瓣号"}).json()
+    assert client.post(f"/api/books/{b0}/cover").status_code == 400
+    b1 = client.post("/api/books", json={"title": "有豆瓣号", "douban_id": "999"}).json()
+    assert client.post(f"/api/books/{b1}/cover").json() == {"cover_url": "//c999"}
+    assert client.get(f"/api/books/{b1}").json()["cover_url"] == "//c999"
