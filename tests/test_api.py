@@ -318,7 +318,7 @@ def test_cli_meta_no_pending(tmp_path):
     assert json.loads(r.stdout) == {"ok": True, "judged": 0, "total": 0, "pending": 0}
 
 def test_cover_endpoint(client, monkeypatch):
-    """单本抓封面：有 isbn → 下载落盘转 /covers/；占位图/无 isbn → 只回热链。"""
+    """单本抓封面：douban_id+isbn → 下载落盘；占位图→不落盘 has_cover=False。"""
     import app.douban as dmod
     monkeypatch.setattr(dmod, "fetch_cover_url",
                         lambda i, **k: f"https://img3.doubanio.com/view/subject/s/public/s{i}.jpg")
@@ -326,14 +326,17 @@ def test_cover_endpoint(client, monkeypatch):
     b0 = client.post("/api/books", json={"title": "无豆瓣号"}).json()
     assert client.post(f"/api/books/{b0}/cover").status_code == 400
     b1 = client.post("/api/books", json={"title": "有书", "douban_id": "999", "isbn": "978999"}).json()
-    assert client.post(f"/api/books/{b1}/cover").json() == {"cover_url": "/covers/978999.jpg"}
-    assert client.get(f"/api/books/{b1}").json()["cover_url"] == "/covers/978999.jpg"
-    assert (client.app.state.root / "raw/covers/978999.jpg").read_bytes() == b"bytes"
-    # 豆瓣无真封面（返回占位图）→ 不存脏图，回热链交 --link 人工补
+    assert client.post(f"/api/books/{b1}/cover").json() == {"has_cover": True, "isbn": "978999"}
+    root = client.app.state.root
+    assert (root / "raw/covers/978999.jpg").read_bytes() == b"bytes"
+    assert client.get("/cover/978999").status_code == 200        # 动态路由伺服本地文件
+    assert "978999" in client.get("/api/covers").json()
+    # 豆瓣无真封面（占位图）→ 不存脏图
     monkeypatch.setattr(dmod, "fetch_cover_url",
                         lambda i, **k: "https://img1.doubanio.com/cuphead/book-static/x.gif")
     b2 = client.post("/api/books", json={"title": "占位", "douban_id": "888", "isbn": "978888"}).json()
-    assert client.post(f"/api/books/{b2}/cover").json()["cover_url"].startswith("https://")
+    assert client.post(f"/api/books/{b2}/cover").json() == {"has_cover": False, "isbn": "978888"}
+    assert not (root / "raw/covers/978888.jpg").exists()
 
 def test_cover_network_error_is_502(client, monkeypatch):
     """httpx 网络异常（超时/断连）被包成 RuntimeError → 路由 502，而不是裸 500。"""
@@ -345,17 +348,20 @@ def test_cover_network_error_is_502(client, monkeypatch):
     assert client.post(f"/api/books/{b1}/cover").status_code == 502
 
 def test_wall_endpoint(client, monkeypatch):
+    """书架只显有本地封面文件的书（判据 = 磁盘文件，不是 DB 列）。"""
     import app.douban as dmod
-    monkeypatch.setattr(dmod, "fetch_cover_url", lambda i, **k: f"//c{i}")
-    b1 = client.post("/api/books", json={"title": "有封面", "douban_id": "1", "rating": 9,
+    monkeypatch.setattr(dmod, "fetch_cover_url",
+                        lambda i, **k: f"https://img3.doubanio.com/s{i}.jpg")
+    monkeypatch.setattr(dmod, "_download", lambda u, **k: b"x")
+    b1 = client.post("/api/books", json={"title": "有封面", "douban_id": "1", "isbn": "9781", "rating": 9,
                                          "created": "April 27, 2024 11:32 AM"}).json()
-    client.post(f"/api/books/{b1}/cover")
-    client.post("/api/books", json={"title": "无封面"})
+    client.post(f"/api/books/{b1}/cover")                       # 落盘 9781
+    client.post("/api/books", json={"title": "无封面", "isbn": "9782"})   # 有 isbn 但未落盘
     w = client.get("/api/stats/wall").json()
     assert w["total"] == 2                                   # total 是全库本数
-    assert [i["id"] for i in w["items"]] == [b1]             # items 只含有封面的
-    assert set(w["items"][0]) == {"id", "title", "created", "rating", "cover_url"}
-    assert w["items"][0]["cover_url"] == "//c1"
+    assert [i["id"] for i in w["items"]] == [b1]             # items 只含磁盘有文件的
+    assert set(w["items"][0]) == {"id", "title", "created", "rating", "isbn"}
+    assert w["items"][0]["isbn"] == "9781"
 
 def test_yearly_reads_from_app_root(client, tmp_path, monkeypatch):
     """年度画像的笔记摘录必须读注入的 vault root（create_app 的 root 参数），不是硬编码路径。"""

@@ -20,8 +20,7 @@ CREATE TABLE IF NOT EXISTS books (
   created TEXT,
   last_modified TEXT,
   file_path TEXT,             -- "raw/书名.md"；同名同作者的多个版本/批次共用一个文件
-  douban_id TEXT,             -- 豆瓣 subject 号，前端拼 https://book.douban.com/subject/{id}/
-  cover_url TEXT,             -- 豆瓣封面图 URL（app.douban 抓取，可空）
+  douban_id TEXT,             -- 豆瓣 subject 号（封面真源，可经 og:image 重推）；前端拼 https://book.douban.com/subject/{id}/
   platform_id INTEGER REFERENCES platforms(id)
   -- category 为多对多（book_categories）：数据中 68 本书有多个分类
   -- 无唯一约束：售出书 created 同为 NULL，同书名多批次只能靠应用层规则去重
@@ -87,8 +86,8 @@ def init_db(conn):
     cols = {r[1] for r in conn.execute("PRAGMA table_info(books)")}
     if "douban_id" not in cols:  # 存量库迁移
         conn.execute("ALTER TABLE books ADD COLUMN douban_id TEXT")
-    if "cover_url" not in cols:
-        conn.execute("ALTER TABLE books ADD COLUMN cover_url TEXT")
+    if "cover_url" in cols:  # 封面已改为“磁盘文件存在性”，废弃 cover_url 列（douban_id 为真源）
+        conn.execute("ALTER TABLE books DROP COLUMN cover_url")
     acols = {r[1] for r in conn.execute("PRAGMA table_info(authors)")}
     if "chinese" not in acols:  # 作者国籍（app.ai.gen.ensure_author_meta 填充）
         conn.execute("ALTER TABLE authors ADD COLUMN chinese INTEGER")
@@ -178,7 +177,7 @@ def _shape(conn, row):
         "id": bid, "title": row["title"], "isbn": row["isbn"], "price": row["price"],
         "importance": row["importance"], "progress": row["progress"], "rating": row["rating"],
         "status": row["status"], "created": row["created"], "last_modified": row["last_modified"],
-        "file_path": row["file_path"], "douban_id": row["douban_id"], "cover_url": row["cover_url"],
+        "file_path": row["file_path"], "douban_id": row["douban_id"],
         "platform": row["platform"],
         "authors": _names(conn, "book_authors", "authors", "authors", "author_id", bid),
         "nationalities": [r[0] for r in conn.execute(

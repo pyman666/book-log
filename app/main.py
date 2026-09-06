@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -60,10 +60,21 @@ def _app_version(root: Path) -> str:
     return "dev"
 
 
+def local_cover_stems(covers_dir: Path) -> set:
+    """扫描 raw/covers/，返回拥有本地封面文件的 isbn 主干集合（去扩展名）。
+    前端“是否有封面”与书架过滤的唯一依据——封面的真值在磁盘文件，不在 DB。"""
+    if not covers_dir.exists():
+        return set()
+    return {p.stem for p in covers_dir.iterdir()
+            if p.suffix.lower().lstrip(".") in douban.EXTS}
+
+
 def create_app(db_path: Path, root: Path) -> FastAPI:
     app = FastAPI(title="book-log")
     app.state.db_path = Path(db_path)
     app.state.root = Path(root)
+    covers_dir = Path(root) / "raw" / "covers"   # 本地封面库（app.douban --localize 填充）
+    covers_dir.mkdir(parents=True, exist_ok=True)
     with dbmod.db_conn(app.state.db_path) as conn:
         dbmod.init_db(conn)
 
@@ -229,27 +240,28 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
 
     @app.get("/api/stats/wall")
     def stats_wall(request: Request):
-        """封面墙轻量端点：只出前端需要的 5 个字段，不带 authors/categories 全量 payload。"""
+        """封面墙：只出有本地封面文件（raw/covers/<isbn>.*）的书，前端直接渲染不需兼容旧热链。"""
+        stems = local_cover_stems(covers_dir)
         with conn_of(request) as conn:
-            return analytics.cover_wall(conn)
+            data = analytics.cover_wall(conn)
+        data["items"] = [it for it in data["items"] if it["isbn"] in stems]
+        return data
 
     @app.post("/api/books/{bid}/cover")
     def book_cover_fill(request: Request, bid: int):
-        """新书单本补封面（批量补跑 python -m app.douban）。"""
+        """新书单本补封面：以 douban_id 拓 og:image → 落盘 raw/covers/<isbn>（批量走 python -m app.douban）。"""
         with conn_of(request) as conn:
-            row = conn.execute("SELECT douban_id, cover_url FROM books WHERE id = ?", (bid,)).fetchone()
+            row = conn.execute("SELECT douban_id, isbn FROM books WHERE id = ?", (bid,)).fetchone()
             if not row:
                 raise HTTPException(404, "不存在")
             if not row["douban_id"]:
                 raise HTTPException(400, "无豆瓣号，无法抓封面")
-            isbn = conn.execute("SELECT isbn FROM books WHERE id=?", (bid,)).fetchone()["isbn"]
             try:
-                path = douban.fetch_cover_local(row["douban_id"], isbn, covers_dir)
+                path = douban.fetch_cover_local(row["douban_id"], row["isbn"], covers_dir)
             except RuntimeError as e:
                 raise HTTPException(502, str(e))
-            conn.execute("UPDATE books SET cover_url = ? WHERE id = ?", (path, bid))
-            conn.commit()
-            return {"cover_url": path}
+        # path=None 代表豆瓣只有占位图/无 isbn（不落盘），has_cover 驱动前端按钮/刷新
+        return {"has_cover": path is not None, "isbn": row["isbn"]}
 
     # ---------- sync & git ----------
     @app.post("/api/sync")
@@ -275,9 +287,20 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
     static_dir = Path(__file__).parent / "static"
     if static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=static_dir), name="static")
-    covers_dir = Path(root) / "raw" / "covers"   # 本地封面库（app.douban --localize/--link 填充）
-    covers_dir.mkdir(parents=True, exist_ok=True)
-    app.mount("/covers", StaticFiles(directory=covers_dir), name="covers")
+
+    @app.get("/api/covers")
+    def covers_list():
+        """已落盘的本地封面 isbn 清单（前端据此判断“有没有封面”/是否显“抓封面”按钮）。"""
+        return sorted(local_cover_stems(covers_dir))
+
+    @app.get("/cover/{isbn}")
+    def cover_file(isbn: str):
+        """按 isbn 伺服本地封面（忽略扩展名）；无文件 404，前端退书名卡。"""
+        for ext in douban.EXTS:
+            p = covers_dir / f"{isbn}.{ext}"
+            if p.exists():
+                return FileResponse(p)
+        raise HTTPException(404, "no cover")
 
     @app.get("/", include_in_schema=False)
     def index():

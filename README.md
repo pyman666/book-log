@@ -40,11 +40,11 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 - **`app/analytics.py`** — 只读纯聚合：`daily_counts`（剁手日历）、`taste_spectrum`（口味光谱三轴，语言轴用 `authors.chinese`；占位作者「其它/无」不参与）、`quadrant`（评分×重要度）、`cover_wall`（书架数据，`GET /api/stats/wall` 只出 5 字段）；国籍分布走 `stats_group?by=nationality`。路由零加工直出。
 - **视觉**：暖纸编辑排版（Anthropic 式米色纸底 + 朱砂印章 + 宋体展示字 + 章节号）；封面是 iPod Cover Flow 式 3D 书架（点封面进详情，← → 翻书）；全部图表色走 `style.css` token（8-slot 分类色过 validate_palette.js 双模式）；系统切深浅色时页面自动重渲染。
-- **`app/douban.py`** — 豆瓣封面（og:image → `books.cover_url` → 本地化 `raw/covers/<isbn>.<ext>`）。
-  豆瓣 CDN 2026-09 起校验 Referer，浏览器热链大面积 403，**封面必须本地化**：
-  `uv run python -m app.douban` 抓远程 URL；`--localize` 下载到 raw/covers/ 并把 cover_url 改写成 `/covers/...` 本地路径；
-  手动补图按 `<isbn>.jpg` 扔进 raw/covers/ 后跑 `--link` 挂接（也能盖掉豆瓣占位图行）。
-  三种模式共用纪律：2.5s+抖动限速、成功即提交、Ctrl-C 安全、幂等续跑、连续 6 败刹车。单本按需：`POST /api/books/{id}/cover`。服务挂载 `/covers` 静态目录。
+- **`app/douban.py`** — 豆瓣封面，**以 `douban_id` 为真源**（og:image → 下载 → `raw/covers/<isbn>.<ext>`）。
+  封面真值 = **磁盘上是否存在 `<isbn>` 文件**，DB 不再存 URL（豆瓣 CDN 2026-09 起校验 Referer，浏览器热链大面积 403，封面必须本地化）。三种用法：
+  `--localize` 遍历有 douban_id+isbn、尚缺本地封面的书，逐本 og:image→下载落盘（同 isbn 多批次去重、占位图跳过）；
+  手动补图按 `<isbn>.jpg` 扔进 `raw/covers/` 即自动被识别（**无需挂接命令**，存在即关联）；单本按需 `POST /api/books/{id}/cover`。
+  共用纪律：2.5s+抖动限速、成功即落盘、Ctrl-C 安全、幂等续跑、连续 6 败刹车。前端经 `/cover/<isbn>`（忽略扩展名、无文件 404）取图，`/api/covers` 出本地清单，书架只显示已落封面的书。
 - **`app/ai/`** — DashScope Qwen（OpenAI 兼容 SDK）。`llm.py` 只管 chat()（key 读 bosch-ai-framework/.env 的 DASHSCOPE_API_KEY，不入库不入 git）；`gen.py` 管缓存（`ai_cache` 表：笔记按 file_path+mtime 失效，年度按 `yearly:<年>`）与提示词。
   - `GET /api/books/{id}/summary[?fresh=1]` 单本 AI 读后摘要
   - `GET /api/ai/yearly?year=N[&fresh=1|&pending=1]` 年度画像；pending=1 只查缓存不生成
@@ -68,9 +68,9 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 ## 常用命令
 
 ```bash
-uv run python -m app.douban          # 补全缺失封面 URL（幂等，可中断续跑）
-uv run python -m app.douban --localize  # 远程封面下载到 raw/covers/<isbn>（限速，约400张/20分钟）
-uv run python -m app.douban --link   # 把 raw/covers/ 手工放的 <isbn>.jpg 挂到书
+uv run python -m app.douban --localize  # 以 douban_id 为源，逐本 og:image→下载 raw/covers/<isbn>（限速，428本约35分钟，可断点续跑）
+uv run python -m app.douban --test <id>  # 只打印某 douban_id 的 og:image URL（调试用）
+# 手工补图：按 <isbn>.jpg 放进 raw/covers/ 即可，前端自动识别（无需命令）
 uv run python -m app.ai.gen --meta   # 批量判定作者国籍/华人标志（LLM，幂等；失败不写库可重跑）
 uv run pytest -q                     # 54 测试，全离线（LLM/抓取均 monkeypatch）
 ```

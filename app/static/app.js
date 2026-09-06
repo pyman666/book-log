@@ -5,8 +5,15 @@ let charts = [];
 
 const cssVar = n => getComputedStyle(document.body).getPropertyValue(n).trim();
 
-// 豆瓣默认占位图(book-static)视觉上是灰盒，不如退回书名卡；空串一律视为无封面
-const realCover = u => (u && !u.includes("book-static") && !u.startsWith("null")) ? u : "";
+// 封面真值 = 本地文件 raw/covers/<isbn>.*（/api/covers 拉一次集合作判据）；无文件退书名卡
+const coverSet = new Set();
+let coversLoaded = false;
+async function ensureCovers() {   // 幂等：首次加载后缓存，新抓封面后 refreshCovers() 重拉
+  try { const s = await api("/api/covers"); coverSet.clear(); s.forEach(x => coverSet.add(x)); coversLoaded = true; }
+  catch (e) { /* 拉不到就当没封面，退书名卡 */ }
+}
+async function refreshCovers() { coverSet.clear(); await ensureCovers(); }
+const coverSrc = b => (b.isbn && coverSet.has(b.isbn)) ? `/cover/${b.isbn}` : "";
 const fmt = (v, d = 2) => (v == null ? "—" : Number(v).toFixed(d));
 const yearOf = s => ((s || "").match(/\b(19\d{2}|20\d{2})\b/) || ["—"])[0];
 const splitList = s => (s || "").split(/[,，、]/).map(x => x.trim()).filter(Boolean);
@@ -299,6 +306,7 @@ let cfAll = [], cfList = [], cfCenter = 0;
 const cfNodes = new Map();
 
 async function panelShelf() {
+  if (!coversLoaded) await ensureCovers();   // coverSrc 依赖集合；首次拉一次
   const data = await api("/api/stats/wall");
   cfAll = data.items.slice().sort(
     (a, b) => (a.created || "").localeCompare(b.created || "") || a.id - b.id);
@@ -345,16 +353,9 @@ function cfRender() {
     if (!el) {
       el = document.createElement("figure");
       el.className = "cf-item";
-      el.innerHTML = `<img src="${realCover(b.cover_url) || "none"}" alt="${b.title}">`;
+      el.innerHTML = `<img src="${coverSrc(b) || "none"}" alt="${b.title}">`;
       const img = el.firstElementChild;
-      img.onerror = () => {   // CDN 偶发拒绝：退避重试两次，再不行淡显占位
-        if (!img.dataset.r || +img.dataset.r < 2) {
-          img.dataset.r = +img.dataset.r + 1;
-          setTimeout(() => { img.src = b.cover_url; }, 600 * img.dataset.r);
-        } else {
-          img.style.opacity = .25;
-        }
-      };
+      img.onerror = () => { img.style.opacity = .25; };   // 本地文件缺失（罕见）→淡显占位
       el.onclick = () => {   // 每次点击现读下标（节点跨翻页复用，off 会过期）
         const cur = +el.dataset.i;
         if (cur === cfCenter) location.hash = `#/book/${b.id}`;
@@ -576,11 +577,16 @@ async function bookDetail(id) {
   const dbk = b.douban_id
     ? `<a class="obs" href="https://book.douban.com/subject/${b.douban_id}/" target="_blank" rel="noopener">🌐 豆瓣</a>`
     : "";
-  const coverBtn = (b.douban_id && !realCover(b.cover_url))
-    ? `<button id="d-cover" class="ghost" type="button" title="从豆瓣抓封面">抓封面</button>` : "";
+  if (!coversLoaded) await ensureCovers();
+  const hasCover = b.isbn && coverSet.has(b.isbn);
+  const coverImg = hasCover
+    ? `<img class="d-cover" src="/cover/${b.isbn}" alt="${b.title} 封面">` : "";
+  const coverBtn = (b.douban_id && !hasCover)
+    ? `<button id="d-cover" class="ghost" type="button" title="从豆瓣拓封面并落盘">抓封面</button>` : "";
   view.innerHTML = `
     <div class="detail">
       <section class="panel meta">
+        ${coverImg}
         <h2>${b.title}${dbk}${obs}${coverBtn}</h2>
         <form id="d-form">${BOOK_FIELDS}
           <div class="row"><button class="primary" type="submit">保存</button>
@@ -593,13 +599,14 @@ async function bookDetail(id) {
       ${b.file_path ? `<section class="panel wide"><h2>AI 读后摘要 <button id="sum-refresh" class="ghost right" title="重新生成">↻</button></h2>
         <div id="sum" class="md"><span class="muted"><span class="spin"></span>生成中…（首次约十几秒）</span></div></section>` : ""}
     </div>`;
-  if (b.douban_id && !realCover(b.cover_url)) {
+  if (b.douban_id && !hasCover) {
     $("#d-cover").onclick = async () => {
       const btn = $("#d-cover");
       btn.disabled = true; btn.textContent = "抓取中…";
       try {
-        await api(`/api/books/${id}/cover`, { method: "POST" });
-        btn.remove();   // 成功后按钮消失；回仪表盘封面墙即可见
+        const r = await api(`/api/books/${id}/cover`, { method: "POST" });
+        if (r.has_cover) { await refreshCovers(); bookDetail(id); }   // 落盘→重渲染显示封面
+        else { btn.textContent = "豆瓣无封面"; btn.disabled = true; } // 占位图/无 isbn，人工补
       } catch (e) {
         btn.disabled = false; btn.textContent = "抓封面";
         toast(e.message, true);

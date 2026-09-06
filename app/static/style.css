@@ -203,6 +203,8 @@ td select.inline { width: auto; }
 @media (max-width: 800px) { .detail { grid-template-columns: 1fr; } }
 .detail .meta h2 { font: 600 22px/1.35 var(--font-display); letter-spacing: .03em;
   color: var(--text-primary); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.d-cover { float: right; width: 104px; aspect-ratio: 2 / 3; object-fit: contain; margin: 0 0 10px 14px;
+  border-radius: 3px; box-shadow: 0 6px 18px rgba(60, 35, 10, .28); background: var(--panel); }
 .meta label { display: block; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
 .meta input, .meta select { width: 100%; margin-top: 2px; }
 .row { display: flex; gap: 8px; margin-top: 10px; }
