@@ -181,6 +181,10 @@ def _shape(conn, row):
         "file_path": row["file_path"], "douban_id": row["douban_id"], "cover_url": row["cover_url"],
         "platform": row["platform"],
         "authors": _names(conn, "book_authors", "authors", "authors", "author_id", bid),
+        "nationalities": [r[0] for r in conn.execute(
+            "SELECT DISTINCT a.nationality FROM book_authors ba JOIN authors a ON a.id=ba.author_id "
+            "WHERE ba.book_id=? AND a.nationality IS NOT NULL AND a.nationality != '' "
+            "ORDER BY a.nationality", (bid,))],
         "publishers": _names(conn, "book_publishers", "publishers", "publishers", "publisher_id", bid),
         "categories": _names(conn, "book_categories", "categories", "categories", "category_id", bid),
     }
@@ -204,8 +208,8 @@ def update_book(conn, bid, fields):
 
 
 def list_books(conn, q=None, category=None, author=None, publisher=None, platform=None,
-               status=None, min_price=None, max_price=None, min_rating=None, year=None,
-               sort="id", desc=False, page=1, page_size=50):
+               status=None, nationality=None, min_price=None, max_price=None, min_rating=None,
+               year=None, sort="id", desc=False, page=1, page_size=50):
     where, args = ["1=1"], []
     if q:
         where.append("(b.title LIKE ? OR b.isbn = ?)")
@@ -226,6 +230,10 @@ def list_books(conn, q=None, category=None, author=None, publisher=None, platfor
         where.append("EXISTS (SELECT 1 FROM book_authors ba JOIN authors a ON a.id = ba.author_id "
                      "WHERE ba.book_id = b.id AND a.name = ?)")
         args.append(author)
+    if nationality:
+        where.append("EXISTS (SELECT 1 FROM book_authors ba JOIN authors a ON a.id = ba.author_id "
+                     "WHERE ba.book_id = b.id AND a.nationality = ?)")
+        args.append(nationality)
     if publisher:
         where.append("EXISTS (SELECT 1 FROM book_publishers bp JOIN publishers p ON p.id = bp.publisher_id "
                      "WHERE bp.book_id = b.id AND p.name = ?)")
@@ -246,8 +254,15 @@ def list_books(conn, q=None, category=None, author=None, publisher=None, platfor
 
 def facets(conn):
     col = lambda t: [r[0] for r in conn.execute(f"SELECT name FROM {t} ORDER BY name")]
+    nats = [r[0] for r in conn.execute(
+        "SELECT DISTINCT nationality FROM authors WHERE nationality IS NOT NULL "
+        "AND nationality != '' AND nationality != '未知' ORDER BY nationality")]
+    years = [r[0] for r in conn.execute(
+        "SELECT DISTINCT year_of(created) FROM books "
+        "WHERE year_of(created) IS NOT NULL ORDER BY 1 DESC")]
     return {"categories": col("categories"), "platforms": col("platforms"),
-            "authors": col("authors"), "publishers": col("publishers")}
+            "authors": col("authors"), "publishers": col("publishers"),
+            "nationalities": nats, "years": years}
 
 
 def stats_summary(conn):
@@ -265,7 +280,7 @@ def stats_summary(conn):
 
 
 def stats_group(conn, by, agg="count"):
-    """按维度聚合。by: category|platform|author|publisher|year|rating；
+    """按维度聚合。by: category|platform|author|publisher|year|rating|nationality；
     agg: count|sum_price|avg_rating。NULL 价格不参与金额；多值维度不重复计数同一本书。"""
     if agg not in ("count", "sum_price", "avg_rating"):
         raise ValueError(f"bad agg: {agg}")
@@ -279,6 +294,11 @@ def stats_group(conn, by, agg="count"):
                   "JOIN book_authors ba ON ba.book_id = b.id JOIN authors a ON a.id = ba.author_id",
         "publisher": "SELECT b.id, b.price, b.rating, p.name AS key FROM books b "
                      "JOIN book_publishers bp ON bp.book_id = b.id JOIN publishers p ON p.id = bp.publisher_id",
+        # 国籍：按作者国名（authors.nationality，ensure_author_meta 填充）；
+        # 未判定/空的归「未标注」；多国籍书在每个国家各计一次（同 author 维度语义）
+        "nationality": "SELECT b.id, b.price, b.rating, "
+                       "COALESCE(NULLIF(a.nationality, ''), '未标注') AS key FROM books b "
+                       "JOIN book_authors ba ON ba.book_id=b.id JOIN authors a ON a.id=ba.author_id",
         "year": "SELECT b.id, b.price, b.rating, year_of(b.created) AS key FROM books b",
         "rating": "SELECT b.id, b.price, b.rating, b.rating AS key FROM books b",
     }[by]

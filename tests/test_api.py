@@ -108,6 +108,59 @@ def test_group(client):
     assert client.get("/api/stats/group", params={"by": "year", "agg": "bogus"}).status_code == 400
 
 
+def test_group_nationality(client):
+    from app import db as dbmod
+    client.post("/api/books", json={"title": "甲", "authors": ["余华"], "price": 10})
+    client.post("/api/books", json={"title": "乙", "authors": ["加缪"], "price": -4})
+    client.post("/api/books", json={"title": "丙"})   # 无作者：不进国籍维度（JOIN）
+    with dbmod.db_conn(client.app.state.db_path) as c:
+        c.execute("UPDATE authors SET nationality='中国' WHERE name='余华'")
+        c.execute("UPDATE authors SET nationality='法国' WHERE name='加缪'")
+        c.commit()
+    g = {x["key"]: x["value"] for x in
+         client.get("/api/stats/group", params={"by": "nationality"}).json()}
+    assert g == {"中国": 1, "法国": 1}
+    gm = {x["key"]: x["value"] for x in
+          client.get("/api/stats/group", params={"by": "nationality", "agg": "sum_price"}).json()}
+    assert gm["中国"] == 10 and gm["法国"] == -4
+    # 未判定（nationality 为 NULL）归入「未标注」
+    client.post("/api/books", json={"title": "丁", "authors": ["未判定作者"]})
+    g2 = {x["key"]: x["value"] for x in
+          client.get("/api/stats/group", params={"by": "nationality"}).json()}
+    assert g2["未标注"] == 1
+
+
+def test_list_nationality_filter(client):
+    from app import db as dbmod
+    client.post("/api/books", json={"title": "甲", "authors": ["余华"],
+                                    "created": "April 27, 2024 11:32 AM"})
+    client.post("/api/books", json={"title": "乙", "authors": ["加缪"]})
+    with dbmod.db_conn(client.app.state.db_path) as c:
+        c.execute("UPDATE authors SET nationality='中国' WHERE name='余华'")
+        c.execute("UPDATE authors SET nationality='法国' WHERE name='加缪'")
+        c.commit()
+    d = client.get("/api/books", params={"nationality": "中国"}).json()
+    assert d["total"] == 1 and d["items"][0]["title"] == "甲"
+    assert d["items"][0]["nationalities"] == ["中国"]   # _shape 带出国籍
+    f = client.get("/api/facets").json()
+    assert f["nationalities"] == ["中国", "法国"]
+    assert f["years"] == [2024]                          # 年度筛选选项
+    assert client.get("/api/books", params={"year": 2024}).json()["total"] == 1
+
+
+def test_spectrum_excludes_placeholder_author(client):
+    """占位作者「其它」(chinese=0, 54 本垃圾桶) 不得污染语言轴的"翻译"计数。"""
+    from app import db as dbmod
+    client.post("/api/books", json={"title": "占位书", "authors": ["其它"]})
+    with dbmod.db_conn(client.app.state.db_path) as c:
+        c.execute("UPDATE authors SET chinese=0, nationality='未知' WHERE name='其它'")
+        c.commit()
+    sp = {a["axis"]: {s["key"]: s["value"] for s in a["segments"]}
+          for a in client.get("/api/stats/spectrum").json()}
+    assert sp.get("语言", {}) == {}                      # 语言轴不计占位作者
+    assert sp["读完没"]["未读"] == 1                     # 其它轴照常
+
+
 def test_git_push_commits_changes(client, tmp_path):
     import subprocess
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
@@ -250,16 +303,6 @@ def test_spectrum_is_pure_read(client, monkeypatch):
     with dbmod.db_conn(client.app.state.db_path) as c:
         flags = dict(c.execute("SELECT name, chinese FROM authors").fetchall())
     assert all(v is None for v in flags.values())
-
-def test_stats_nationalities(client):
-    from app import db as dbmod
-    _seed(client)
-    with dbmod.db_conn(client.app.state.db_path) as c:
-        c.execute("UPDATE authors SET nationality='法国' WHERE name LIKE '%加缪%'")
-        c.commit()
-    d = {r["key"]: r for r in client.get("/api/stats/nationalities").json()}
-    assert d["法国"] == {"key": "法国", "authors": 1, "books": 1}
-    assert d["未知"]["authors"] == 2               # 未判定的归"未知"
 
 def test_cli_meta_no_pending(tmp_path):
     """CLI python -m app.ai.gen --meta：无 pending 时不调模型、正常退出（--db 指向临时库，不碰真库）。"""

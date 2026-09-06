@@ -75,6 +75,7 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
     def list_books(request: Request, q: Optional[str] = None, category: Optional[str] = None,
                    author: Optional[str] = None, publisher: Optional[str] = None,
                    platform: Optional[str] = None, status: Optional[str] = None,
+                   nationality: Optional[str] = None,
                    min_price: Optional[float] = None, max_price: Optional[float] = None,
                    min_rating: Optional[int] = None, year: Optional[int] = None,
                    sort: str = "id", desc: bool = False,
@@ -82,6 +83,7 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
         with conn_of(request) as conn:
             return dbmod.list_books(conn, q=q, category=category, author=author,
                                     publisher=publisher, platform=platform, status=status,
+                                    nationality=nationality,
                                     min_price=min_price, max_price=max_price,
                                     min_rating=min_rating, year=year, sort=sort, desc=desc,
                                     page=page, page_size=page_size)
@@ -224,11 +226,6 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
     def stats_quadrant(request: Request):
         with conn_of(request) as conn:
             return analytics.quadrant(conn)
-
-    @app.get("/api/stats/nationalities")
-    def stats_nationalities(request: Request):
-        with conn_of(request) as conn:
-            return analytics.nationality_top(conn)
 
     @app.get("/api/stats/wall")
     def stats_wall(request: Request):

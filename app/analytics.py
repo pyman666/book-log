@@ -47,14 +47,18 @@ def daily_counts(conn):
 
 
 def _book_axes(conn):
-    """逐书取 (分类集合, 作者[(名,国籍)], status, progress)，多对多在此收敛。"""
+    """逐书取 (分类集合, 作者[(名,国籍)], status, progress)，多对多在此收敛。
+    「其它/其他/无」是导入遗留的占位作者（54 本垃圾桶，nationality=未知），
+    从作者维度剔除——否则 chinese=0 会把它们全算成"翻译"。"""
+    PLACEHOLDER = ("其它", "其他", "无")
     cats, authors = defaultdict(list), defaultdict(list)
     for bid, c in conn.execute("SELECT bc.book_id, c.name FROM book_categories bc "
                                "JOIN categories c ON c.id=bc.category_id"):
         cats[bid].append(c)
     for bid, n, cn in conn.execute("SELECT ba.book_id, au.name, au.chinese FROM book_authors ba "
                                    "JOIN authors au ON au.id=ba.author_id"):
-        authors[bid].append((n, cn))
+        if n not in PLACEHOLDER:
+            authors[bid].append((n, cn))
     rows = conn.execute("SELECT id, status, progress FROM books").fetchall()
     return [(r["id"], set(cats[r["id"]]), authors[r["id"]], r["status"], r["progress"]) for r in rows]
 
@@ -106,17 +110,3 @@ def cover_wall(conn):
         "SELECT id, title, created, rating, cover_url FROM books "
         "WHERE cover_url IS NOT NULL ORDER BY id").fetchall()
     return {"total": total, "items": [dict(r) for r in rows]}
-
-
-def nationality_top(conn, limit=20):
-    """作者国籍分布：[{key 国名, authors 作者数, books 书数}]，按书数降序。
-    书数=该书任一作者属此国籍即计一次（多作者书在各国籍下重复计，与 stats_group 口径一致）。
-    "其它/其他/无"是导入遗留的占位作者，不计入版图。"""
-    rows = conn.execute(
-        """SELECT COALESCE(NULLIF(a.nationality, ''), '未知') AS key,
-                  COUNT(DISTINCT a.id) AS authors,
-                  COUNT(DISTINCT ba.book_id) AS books
-           FROM authors a LEFT JOIN book_authors ba ON ba.author_id = a.id
-           WHERE a.name NOT IN ('其它', '其他', '无')
-           GROUP BY key ORDER BY books DESC, authors DESC LIMIT ?""", (limit,)).fetchall()
-    return [{"key": r["key"], "authors": r["authors"], "books": r["books"]} for r in rows]

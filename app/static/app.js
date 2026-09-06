@@ -60,24 +60,17 @@ async function dashboard() {
         <div id="spectrum-flags"></div><div class="chart" id="ch-spectrum"></div></section>
       <section class="panel span5"><h2><span class="no">肆</span><span class="t">评分 × 重要度</span><span class="hint">气泡=盈亏，红=亏 绿=赚</span></h2>
         <div class="chart" id="ch-quadrant"></div></section>
-      <section class="panel"><h2><span class="no">伍</span><span class="t">分类目净花费</span><span class="hint">元，红=亏 绿=赚</span></h2><div class="chart" id="ch-cat"></div></section>
-      <section class="panel"><h2><span class="no">陆</span><span class="t">年度读书量</span></h2><div class="chart" id="ch-year"></div></section>
-      <section class="panel"><h2><span class="no">柒</span><span class="t">作者国籍</span><span class="hint">按关联书数 Top 12</span></h2><div class="chart" id="ch-nat"></div></section>
-      <section class="panel"><h2><span class="no">捌</span><span class="t">作者分布</span><span class="hint">Top 10</span></h2><div class="chart" id="ch-author"></div></section>
-      <section class="panel"><h2><span class="no">玖</span><span class="t">出版社分布</span><span class="hint">Top 10</span></h2><div class="chart" id="ch-publisher"></div></section>
-      <section class="panel wide letter"><h2><span class="no">拾</span><span class="t">AI 年度画像</span>
+      <section class="panel wide"><h2><span class="no">伍</span><span class="t">分布</span><span class="hint" id="dist-hint">本数 · Top 12</span>
+        <select id="dist-by" class="inline right" title="统计维度"></select>
+        <select id="dist-agg" class="inline right" title="统计方式"></select></h2>
+        <div class="chart" id="ch-dist"></div></section>
+      <section class="panel wide letter"><h2><span class="no">陆</span><span class="t">AI 年度画像</span>
         <select id="ai-year" class="inline right"></select>
         <button id="ai-gen" class="ghost right">生成</button><button id="ai-refresh" class="ghost right" title="重新生成">↻</button></h2>
         <div class="orn" aria-hidden="true">❦</div>
         <div id="ai-yearly" class="md"><span class="muted">点“生成”，AI 读完你那一年的书和笔记后给你画像（首次约半分钟）</span></div></section>
     </div>`;
-  const [s, cat, year, author, publisher] = await Promise.all([
-    api("/api/stats/summary"),
-    api("/api/stats/group?by=category&agg=sum_price"),
-    api("/api/stats/group?by=year&agg=count"),
-    api("/api/stats/group?by=author&agg=count"),
-    api("/api/stats/group?by=publisher&agg=count"),
-  ]);
+  const s = await api("/api/stats/summary");
   const lg = (k, v, sub) =>
     `<div class="lg"><span class="k">${k}</span><span class="v">${v}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</div>`;
   $("#ledger").innerHTML =
@@ -85,54 +78,8 @@ async function dashboard() {
     lg("在库", s.in_lib) + lg("已售", s.sold) + lg("读完", s.finished, "读完一本划掉一本") +
     lg("其中亏损", fmt(s.loss)) + lg("其中净赚", fmt(s.gain)) + lg("有价书数", s.priced);
 
-  // 分类目净花费：diverging 横向条形（按值升序，最大在上）
-  const catData = cat.filter(x => x.value != null).sort((a, b) => a.value - b.value);
-  baseChart($("#ch-cat")).setOption({
-    tooltip: { trigger: "axis", valueFormatter: v => `${v} 元` },
-    xAxis: { type: "value" },
-    yAxis: { type: "category", data: catData.map(x => x.key),
-      axisLabel: { color: cssVar("--text-secondary") } },
-    series: [{ type: "bar", barMaxWidth: 16,
-      data: catData.map(x => ({ value: x.value,
-        itemStyle: { color: x.value >= 0 ? cssVar("--div-pos") : cssVar("--div-neg"), borderRadius: 3 } })),
-      label: { show: true, position: "right", color: cssVar("--text-secondary"),
-        formatter: p => p.value } }],
-  });
-  // 年度读书量：折线（2px 线、8px 点、hover 十字线）
-  const yearData = year.filter(x => x.key !== "未知").sort((a, b) => Number(a.key) - Number(b.key));
-  baseChart($("#ch-year")).setOption({
-    tooltip: { trigger: "axis" },
-    xAxis: { type: "category", data: yearData.map(x => x.key) },
-    series: [{ type: "line", data: yearData.map(x => x.value), symbolSize: 8,
-      lineStyle: { width: 2, color: cssVar("--series-1") },
-      itemStyle: { color: cssVar("--series-1") } }],
-  });
-  // 作者分布：横向条 Top10 + 直接标数值
-  const aData = [...author].sort((a, b) => b.value - a.value).slice(0, 10).reverse();
-  baseChart($("#ch-author")).setOption({
-    tooltip: { trigger: "axis" },
-    xAxis: { type: "value" },
-    yAxis: { type: "category", data: aData.map(x => x.key),
-      axisLabel: { color: cssVar("--text-secondary") } },
-    series: [{ type: "bar", barMaxWidth: 16, data: aData.map(x => x.value),
-      itemStyle: { color: cssVar("--series-2"), borderRadius: 3 },
-      label: { show: true, position: "right", color: cssVar("--text-secondary"),
-        formatter: p => p.value } }],
-  });
-  // 出版社分布：横向条 Top10 + 直接标数值
-  const pData = [...publisher].sort((a, b) => b.value - a.value).slice(0, 10).reverse();
-  baseChart($("#ch-publisher")).setOption({
-    tooltip: { trigger: "axis" },
-    xAxis: { type: "value" },
-    yAxis: { type: "category", data: pData.map(x => x.key),
-      axisLabel: { color: cssVar("--text-secondary") } },
-    series: [{ type: "bar", barMaxWidth: 16, data: pData.map(x => x.value),
-      itemStyle: { color: cssVar("--series-5"), borderRadius: 3 },
-      label: { show: true, position: "right", color: cssVar("--text-secondary"),
-        formatter: p => p.value } }],
-  });
   // 新面板：失败不互相阻塞（如 LLM 配额、封面未抓完）
-  [panelHeatmap, panelSpectrum, panelQuadrant, panelNationalities, panelShelf, panelYearlyAI]
+  [panelHeatmap, panelSpectrum, panelQuadrant, panelShelf, panelDistribution, panelYearlyAI]
     .forEach(f => f().catch(e => console.warn(f.name, e)));
 }
 
@@ -241,18 +188,70 @@ function renderFlagsChip(pending) {
   };
 }
 
-async function panelNationalities() {
-  const rows = (await api("/api/stats/nationalities")).slice(0, 12).reverse();
-  baseChart($("#ch-nat")).setOption({
+// ---------- 分布（单图动态切换：维度 × 指标；点柱条跳书单筛选） ----------
+const DIST = { by: "author", agg: "count", top: 12 };
+const DIST_BY = [["nationality", "作者国籍"], ["author", "作者"], ["publisher", "出版社"],
+                 ["category", "类别"], ["platform", "平台"], ["year", "年度"]];
+const DIST_AGG = [["count", "本数"], ["sum_price", "金额"]];
+let distChart = null;
+let distRows = [];
+
+async function panelDistribution() {
+  const bySel = $("#dist-by"), aggSel = $("#dist-agg");
+  bySel.innerHTML = DIST_BY.map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
+  aggSel.innerHTML = DIST_AGG.map(([v, l]) => `<option value="${v}">${l}</option>`).join("");
+  bySel.value = DIST.by; aggSel.value = DIST.agg;
+  bySel.onchange = () => { DIST.by = bySel.value; drawDist(); };
+  aggSel.onchange = () => { DIST.agg = aggSel.value; drawDist(); };
+  distChart = baseChart($("#ch-dist"));   // 持久实例：切维度/指标时柱形平滑变形
+  distChart.on("click", p => {           // 点柱条 → 书单页按该维度值筛选
+    if (p.componentType !== "series") return;
+    const row = distRows[distRows.length - 1 - p.dataIndex];
+    if (!row) return;
+    Object.assign(filters, { category: "", author: "", publisher: "", platform: "",
+                             nationality: "", year: "" });
+    filters[DIST.by] = String(row.key);
+    filters.page = 1;
+    location.hash = "#/books";
+  });
+  await drawDist();
+}
+
+async function drawDist() {
+  if (!distChart) return;
+  const data = (await api(`/api/stats/group?by=${DIST.by}&agg=${DIST.agg}`))
+    .filter(x => {
+      if (DIST.agg === "sum_price" && x.value == null) return false;
+      if (DIST.by === "nationality" && x.key === "未知") return false;  // 「其它」占位垃圾桶，与原国籍面板同口径
+      if (DIST.agg === "count" && x.key === "未知") return false;      // 年度未定日期的书不计本数
+      return true;
+    });
+  let rows;
+  if (DIST.by === "year") {
+    rows = data.sort((a, b) => Number(a.key) - Number(b.key));   // 年度：全量、时间正序
+  } else {
+    // 取 Top N（金额按绝对值挑，展示仍按值降序=最大亏损在上）
+    rows = [...data].sort((a, b) => DIST.agg === "sum_price"
+      ? Math.abs(b.value) - Math.abs(a.value) : b.value - a.value).slice(0, DIST.top);
+    if (DIST.agg === "sum_price") rows.sort((a, b) => b.value - a.value);
+  }
+  distRows = rows;
+  const isMoney = DIST.agg === "sum_price";
+  $("#dist-hint").textContent = (isMoney ? "元，红=亏 绿=赚" : "本数") +
+    (DIST.by === "year" ? " · 全部年份" : " · Top 12");
+  distChart.setOption({
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" },
-      formatter: ps => { const r = rows[ps[0].dataIndex];
-        return `${r.key}：${r.authors} 位作者 · 关联 ${r.books} 本书`; } },
+      valueFormatter: v => isMoney ? `${v} 元 · ${v >= 0 ? "亏" : "赚"}` : `${v} 本` },
     xAxis: { type: "value" },
-    yAxis: { type: "category", data: rows.map(r => r.key),
+    yAxis: { type: "category", data: [...rows].reverse().map(x => x.key),
       axisLabel: { color: cssVar("--text-secondary") } },
-    series: [{ type: "bar", barMaxWidth: 14, data: rows.map(r => r.books),
-      itemStyle: { color: cssVar("--series-2"), borderRadius: 3 },
-      label: { show: true, position: "right", color: cssVar("--text-secondary") } }],
+    series: [{ type: "bar", barMaxWidth: 16,
+      data: [...rows].reverse().map(x => ({ value: x.value,
+        itemStyle: { borderRadius: 3,
+          color: isMoney ? (x.value >= 0 ? cssVar("--div-pos") : cssVar("--div-neg"))
+                         : cssVar("--series-1") } })),
+      label: { show: true, position: "right", color: cssVar("--text-secondary"),
+        formatter: p => isMoney ? Math.round(p.value * 100) / 100 : p.value } }],
   });
 }
 
@@ -411,6 +410,7 @@ async function panelYearlyAI() {
 
 // ---------- 书单 ----------
 const filters = { q: "", category: "", author: "", publisher: "", platform: "",
+                  nationality: "", year: "",
                   status: "in_library", sort: "id", desc: "true", page: 1 };
 
 async function booksView() {
@@ -418,14 +418,16 @@ async function booksView() {
   const f = await api("/api/facets");
   const sel = (key, items, allLabel) => `
     <select data-f="${key}"><option value="">${allLabel}</option>
-    ${items.map(v => `<option ${filters[key] === v ? "selected" : ""}>${v}</option>`).join("")}</select>`;
+    ${items.map(v => `<option ${String(filters[key]) === String(v) ? "selected" : ""}>${v}</option>`).join("")}</select>`;
   view.innerHTML = `
     <div class="toolbar">
       <input id="f-q" placeholder="书名 / ISBN" value="${filters.q}">
       ${sel("category", f.categories, "全部分类")}
       ${sel("author", f.authors, "全部作者")}
       ${sel("publisher", f.publishers, "全部出版社")}
+      ${sel("nationality", f.nationalities, "全部国籍")}
       ${sel("platform", f.platforms, "全部平台")}
+      ${sel("year", f.years, "全部年份")}
       <select data-f="status"><option value="">全部状态</option>
         <option value="in_library" ${filters.status === "in_library" ? "selected" : ""}>在库</option>
         <option value="sold" ${filters.status === "sold" ? "selected" : ""}>已售</option></select>
@@ -442,7 +444,7 @@ async function booksView() {
       <button id="f-new">+ 新书</button>
     </div>
     <table id="tbl"><thead><tr>
-      <th>书名</th><th>作者</th><th>分类</th><th>出版社</th><th>平台</th>
+      <th>书名</th><th>作者</th><th>国籍</th><th>分类</th><th>出版社</th><th>平台</th>
       <th>价格</th><th>进度</th><th>评分</th><th>状态</th><th>创建</th>
     </tr></thead><tbody></tbody></table>
     <div class="pager"><button id="pg-prev">上一页</button><span id="pg-info"></span>
@@ -469,6 +471,7 @@ async function loadBooks() {
     <tr data-id="${b.id}">
       <td class="title" onclick="location.hash='#/book/${b.id}'">${b.title}${b.douban_id ? ` <a class="dbk" title="豆瓣" href="https://book.douban.com/subject/${b.douban_id}/" target="_blank" onclick="event.stopPropagation()">🌐</a>` : ""}${b.status === "in_library" && !b.file_path ? '<span class="warn"> 无正文</span>' : ""}</td>
       <td>${(b.authors || []).join("、") || "—"}</td>
+      <td>${(b.nationalities || []).join("、") || "—"}</td>
       <td>${(b.categories || []).join("、") || "—"}</td>
       <td>${(b.publishers || []).join("、") || "—"}</td>
       <td>${b.platform || "—"}</td>
