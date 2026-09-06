@@ -55,7 +55,7 @@ async function dashboard() {
   view.innerHTML = `
     <div class="ledger" id="ledger"></div>
     <div class="grid2">
-      <section class="panel wide"><h2><span class="no">壹</span><span class="t">书架</span><span class="hint">点封面进详情，← → 翻书</span>
+      <section class="panel wide"><h2><span class="no">壹</span><span class="t">书架</span><span class="hint">随机开场 · 点封面进详情，← → 翻书</span>
         <select id="shelf-year" class="inline right"></select><span id="shelf-stat" class="hint right"></span></h2>
         <div class="shelf">
           <button id="cf-prev" class="cf-arrow prev" aria-label="上一本">‹</button>
@@ -320,9 +320,15 @@ async function panelShelf() {
   setShelfList("");
 }
 
+function cfRandomStart() {
+  // 随机开场：n≥3 时落在 1..n-2，左右两边都留隐藏封面；小列表居中
+  const n = cfList.length;
+  return n <= 2 ? Math.floor(n / 2) : 1 + Math.floor(Math.random() * (n - 2));
+}
+
 function setShelfList(year) {
   cfList = year ? cfAll.filter(b => yearOf(b.created) === year) : cfAll.slice();
-  cfCenter = 0;
+  cfCenter = cfRandomStart();
   $("#cf-stage").querySelectorAll(".cf-item").forEach(el => el.remove());
   cfNodes.clear();
   if (!cfList.length) {
@@ -344,12 +350,13 @@ function cfNav(d) {
 
 function cfRender() {
   const stage = $("#cf-stage");
-  const seen = new Set();
+  const seen = new Set(), fresh = [];
   for (let off = -5; off <= 5; off++) {
     const i = cfCenter + off;
     if (i < 0 || i >= cfList.length) continue;
     const b = cfList[i];
-    let el = cfNodes.get(b.id);
+    const a = Math.abs(off);
+    let el = cfNodes.get(b.id), isNew = false;
     if (!el) {
       el = document.createElement("figure");
       el.className = "cf-item";
@@ -363,17 +370,20 @@ function cfRender() {
       };
       cfNodes.set(b.id, el);
       stage.appendChild(el);
+      el.style.opacity = 0;                                 // 新节点先藏，下一帧淡入
+      isNew = true; fresh.push([el, a]);
     }
-    const a = Math.abs(off);
     el.dataset.i = i;
     el.style.transform = `translateX(${off < 0 ? -CF_OFF[a] : CF_OFF[a]}px)` +
       ` translateZ(${CF_Z[a]}px) rotateY(${off === 0 ? 0 : (off < 0 ? 58 : -58)}deg)`;
-    el.style.opacity = CF_OP[a];
+    if (!isNew) el.style.opacity = CF_OP[a];                // 复用节点照常；新节点等 rAF
     el.style.zIndex = 100 - a * 10;
     el.classList.toggle("cf-active", off === 0);
     seen.add(b.id);
   }
   cfNodes.forEach((el, id) => { if (!seen.has(id)) { el.remove(); cfNodes.delete(id); } });
+  if (fresh.length) requestAnimationFrame(() =>
+    fresh.forEach(([el, a]) => { el.style.opacity = CF_OP[a]; }));
   const b = cfList[cfCenter];
   const title = $("#cf-title");
   title.textContent = b.title;

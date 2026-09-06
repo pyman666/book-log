@@ -42,7 +42,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 后端三块，互不依赖，可单测（全部有测试覆盖）：
 
 - **`app/analytics.py`** — 只读纯聚合：`daily_counts`（剁手日历）、`taste_spectrum`（口味光谱三轴，语言轴用 `authors.chinese`；占位作者「其它/无」不参与）、`quadrant`（评分×重要度）、`cover_wall`（书架数据，`GET /api/stats/wall` 只出 5 字段）；国籍分布走 `stats_group?by=nationality`。路由零加工直出。
-- **视觉**：暖纸编辑排版（Anthropic 式米色纸底 + 朱砂印章 + 宋体展示字 + 章节号）；封面是 iPod Cover Flow 式 3D 书架（点封面进详情，← → 翻书）；全部图表色走 `style.css` token（8-slot 分类色过 validate_palette.js 双模式）；系统切深浅色时页面自动重渲染。
+- **视觉**：暖纸编辑排版（Anthropic 式米色纸底 + 朱砂印章 + 宋体展示字 + 章节号）；封面是 iPod Cover Flow 式 3D 书架（随机开场、左右留隐藏封面，点封面进详情，← → 翻书）；全部图表色走 `style.css` token（8-slot 分类色过 validate_palette.js 双模式）；系统切深浅色时页面自动重渲染。
 - **`app/douban.py`** — 豆瓣封面，**以 `douban_id` 为真源**（og:image → 下载 → `raw/covers/<isbn>.<ext>`）。
   封面真值 = **磁盘上是否存在 `<isbn>` 文件**，DB 不再存 URL（豆瓣 CDN 2026-09 起校验 Referer，浏览器热链大面积 403，封面必须本地化）。三种用法：
   `--localize` 遍历有 douban_id+isbn、尚缺本地封面的书，逐本 og:image→下载落盘（同 isbn 多批次去重、占位图跳过）；
