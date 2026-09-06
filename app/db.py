@@ -4,7 +4,7 @@ import sqlite3
 from contextlib import contextmanager
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, chinese INTEGER);
+CREATE TABLE IF NOT EXISTS authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, chinese INTEGER, nationality TEXT);
 CREATE TABLE IF NOT EXISTS publishers (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS platforms (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
@@ -90,8 +90,10 @@ def init_db(conn):
     if "cover_url" not in cols:
         conn.execute("ALTER TABLE books ADD COLUMN cover_url TEXT")
     acols = {r[1] for r in conn.execute("PRAGMA table_info(authors)")}
-    if "chinese" not in acols:  # 作者国籍（app.ai.gen.ensure_author_flags 填充）
+    if "chinese" not in acols:  # 作者国籍（app.ai.gen.ensure_author_meta 填充）
         conn.execute("ALTER TABLE authors ADD COLUMN chinese INTEGER")
+    if "nationality" not in acols:
+        conn.execute("ALTER TABLE authors ADD COLUMN nationality TEXT")
     conn.commit()
 
 

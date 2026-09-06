@@ -94,57 +94,62 @@ def yearly_portrait(conn, root, year):
 
 
 def flag_status(conn):
-    """→ {"total": 作者数, "pending": 未判定数}。"""
-    row = conn.execute("SELECT COUNT(*) AS total, SUM(chinese IS NULL) AS pending "
+    """→ {"total": 作者数, "pending": 国籍未判定数}。"""
+    row = conn.execute("SELECT COUNT(*) AS total, "
+                       "SUM(nationality IS NULL OR chinese IS NULL) AS pending "
                        "FROM authors").fetchone()
     return {"total": row["total"], "pending": row["pending"] or 0}
 
 
-def ensure_author_flags(conn):
-    """authors.chinese 空的一次性 LLM 批量判定，返回本次判定条数。
+def ensure_author_meta(conn):
+    """LLM 一次性批量判定作者国籍+华人标志（nationality/chinese），返回本次判定条数。
     - 无 pending → 0（幂等，不调模型）；
-    - LLM 调用/解析失败 → 抛错且不写库（chinese 保持 NULL），重新触发即重试；
-    - LLM 响应漏掉个别名字时该名字用启发式兜底（含拉丁字母或·的外文译名 → 非华人）。
-    显式触发：POST /api/ai/author-flags 或 python -m app.ai.gen --flags。
-    口味光谱是纯读：未判定时语言轴按调用走启发式，不阻塞、不写库。"""
-    pending = conn.execute("SELECT id, name FROM authors WHERE chinese IS NULL").fetchall()
+    - LLM 调用/解析失败 → 抛错且不写库，重新触发即重试；
+    - LLM 响应漏掉个别名字：该名字按启发式补（含连续拉丁字母或· → 外籍、国籍"未知"）。
+    显式触发：POST /api/ai/author-meta 或 python -m app.ai.gen --meta。
+    口味光谱是纯读：语言轴只消费 chinese 列，不触发判定。"""
+    pending = conn.execute(
+        "SELECT id, name FROM authors WHERE nationality IS NULL OR chinese IS NULL").fetchall()
     if not pending:
         return 0
-    def guess(n):
-        return 1 if not (re.search(r"[A-Za-z]{2}", n) or "·" in n) else 0
+    def guess(n):  # 启发式兜底 → (country, cn)
+        return ("未知", 0) if re.search(r"[A-Za-z]{2}", n) or "·" in n else ("中国", 1)
     by = {r["name"]: guess(r["name"]) for r in pending}
     text = llm.chat([
         {"role": "system", "content": "你是文学翻译，只输出 JSON。"},
-        {"role": "user", "content": "判断下列作家是否为中国作者（含港澳台，用中文名写作也算）。"
-            '只输出 JSON 数组：[{"name":"余华","cn":1},{"name":"加缪","cn":0}]，顺序与输入一致。\n\n'
-            + "、".join(by)}])
+        {"role": "user", "content": "判断下列作家的国籍（中文国名，古人按其文明，如\"中国\"、\"古希腊\"）"
+            "以及是否为中国作者（含港澳台，用中文名写作也算）。只输出 JSON 数组："
+            '[{"name":"余华","country":"中国","cn":1},{"name":"加缪","country":"法国","cn":0}]，'
+            "顺序与输入一致。\n\n" + "、".join(by)}])
     m = re.search(r"\[.*\]", text, re.S)
     if not m:
         raise ValueError("LLM 响应里没有 JSON 数组")
     for d in json.loads(m.group(0)):
         if d.get("name") in by:
-            by[d["name"]] = 1 if d.get("cn") else 0
+            by[d["name"]] = ((d.get("country") or "未知").strip(), 1 if d.get("cn") else 0)
     for r in pending:
-        conn.execute("UPDATE authors SET chinese=? WHERE id=?", (by[r["name"]], r["id"]))
+        country, cn = by[r["name"]]
+        conn.execute("UPDATE authors SET nationality=?, chinese=? WHERE id=?",
+                     (country, cn, r["id"]))
     conn.commit()
     return len(pending)
 
 
 def main():
-    """CLI：python -m app.ai.gen --flags [--db 路径]（与 app/douban.py 同款一次性脚本模式）"""
+    """CLI：python -m app.ai.gen --meta [--db 路径]（与 app/douban.py 同款一次性脚本模式）"""
     import argparse, sys
     from .. import db as dbmod
     ap = argparse.ArgumentParser(description="AI 一次性数据脚本")
-    ap.add_argument("--flags", action="store_true",
-                    help="批量判定作者国籍（LLM）；失败不写库，可重跑")
+    ap.add_argument("--meta", action="store_true",
+                    help="批量判定作者国籍/华人标志（LLM）；失败不写库，可重跑")
     ap.add_argument("--db", default=str(DB_PATH))
     args = ap.parse_args()
-    if not args.flags:
+    if not args.meta:
         ap.print_help()
         sys.exit(1)
     with dbmod.db_conn(Path(args.db)) as conn:
         try:
-            judged = ensure_author_flags(conn)
+            judged = ensure_author_meta(conn)
             st = flag_status(conn)
         except Exception as e:
             print(json.dumps({"ok": False, "error": f"{type(e).__name__}: {e}"},

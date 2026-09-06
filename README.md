@@ -38,12 +38,13 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 后端三块，互不依赖，可单测（全部有测试覆盖）：
 
-- **`app/analytics.py`** — 只读纯聚合：`daily_counts`（剁手日历）、`taste_spectrum`（口味光谱三轴）、`quadrant`（评分×重要度）、`cover_wall`（封面墙，`GET /api/stats/wall` 只出 5 字段）。路由零加工直出。
+- **`app/analytics.py`** — 只读纯聚合：`daily_counts`（剁手日历）、`taste_spectrum`（口味光谱三轴，语言轴用 `authors.chinese`，未判定时按启发式算出临时值）、`quadrant`（评分×重要度）、`cover_wall`（书架数据，`GET /api/stats/wall` 只出 5 字段）、`nationality_top`（作者国籍分布）。路由零加工直出。
+- **视觉**：暖纸编辑排版（Anthropic 式米色纸底 + 朱砂印章 + 宋体展示字 + 章节号）；封面是 iPod Cover Flow 式 3D 书架（点封面进详情，← → 翻书）；全部图表色走 `style.css` token（8-slot 分类色过 validate_palette.js 双模式）；系统切深浅色时页面自动重渲染。
 - **`app/douban.py`** — 豆瓣封面抓取（og:image → `books.cover_url`）。批量：`uv run python -m app.douban`（限速+抖动+连续 6 败刹车，可反复重跑续传）；单本按需：`POST /api/books/{id}/cover`。图片 CDN 校验 Referer，浏览器 <img> 直连没问题。
 - **`app/ai/`** — DashScope Qwen（OpenAI 兼容 SDK）。`llm.py` 只管 chat()（key 读 bosch-ai-framework/.env 的 DASHSCOPE_API_KEY，不入库不入 git）；`gen.py` 管缓存（`ai_cache` 表：笔记按 file_path+mtime 失效，年度按 `yearly:<年>`）与提示词。
   - `GET /api/books/{id}/summary[?fresh=1]` 单本 AI 读后摘要
   - `GET /api/ai/yearly?year=N[&fresh=1|&pending=1]` 年度画像；pending=1 只查缓存不生成
-  - 作者国籍判定 `ensure_author_flags`：显式触发——`POST /api/ai/author-flags` 或 `uv run python -m app.ai.gen --flags`（LLM 一把判定 → `authors.chinese`，幂等；失败不写库可重跑）。口味光谱纯读，未判定时语言轴按调用走启发式，前端给"判定"按钮
+  - 作者国籍判定 `ensure_author_meta`：显式触发——`POST /api/ai/author-meta` 或 `uv run python -m app.ai.gen --meta`（LLM 一把判定 → `authors.nationality`（中文国名）+ `authors.chinese`（0/1），幂等；失败不写库可重跑，LLM 漏判的个别名字走启发式兜底）。口味光谱纯读，未判定时语言轴按启发式临时算，前端给"判定"按钮；另有 `GET /api/stats/nationalities` 国籍分布
 
 ## 目录与存档
 
@@ -63,7 +64,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 ```bash
 uv run python -m app.douban          # 补全缺失封面（幂等，可中断续跑）
-uv run python -m app.ai.gen --flags  # 批量判定作者国籍（LLM，幂等；失败不写库可重跑）
+uv run python -m app.ai.gen --meta   # 批量判定作者国籍/华人标志（LLM，幂等；失败不写库可重跑）
 uv run pytest -q                     # 47 测试，全离线（LLM/抓取均 monkeypatch）
 ```
 

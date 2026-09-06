@@ -10,13 +10,22 @@
 </head>
 <body class="viz-root">
 <header>
-  <nav>
-    <a href="#/">仪表盘</a>
-    <a href="#/books">书单</a>
-  </nav>
-  <div class="actions">
-    <button id="btn-sync" title="扫描 raw/ 与数据库对账">Sync</button>
-    <button id="btn-push" title="git add + commit + push">Commit &amp; Push</button>
+  <div class="mast">
+    <span class="seal" aria-hidden="true">库</span>
+    <div>
+      <span class="wordmark">书库</span>
+      <span class="tagline" id="tagline">本地读书笔记账本</span>
+    </div>
+  </div>
+  <div class="hd-right">
+    <nav>
+      <a href="#/">仪表盘</a>
+      <a href="#/books">书单</a>
+    </nav>
+    <div class="actions">
+      <button id="btn-sync" title="扫描 raw/ 与数据库对账">Sync</button>
+      <button id="btn-push" title="git add + commit + push">Commit &amp; Push</button>
+    </div>
   </div>
 </header>
 <main id="view"></main>

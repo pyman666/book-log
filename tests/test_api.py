@@ -187,8 +187,8 @@ def test_yearly_endpoint(client, monkeypatch):
     client.get("/api/ai/yearly", params={"year": 2024})
     assert len(calls) == 1                          # 缓存后不再调模型
 
-def test_author_flags_fallback(client, monkeypatch):
-    """LLM 调用失败 → 抛错（路由 502 / CLI 退出码 1）且不写库（chinese 保持 NULL），重新触发即重试。"""
+def test_author_meta_fallback(client, monkeypatch):
+    """LLM 调用失败 → 抛错（路由 502 / CLI 退出码 1）且不写库（chinese/nationality 保持 NULL），重新触发即重试。"""
     from app import db as dbmod
     from app.ai import gen
     def boom(msgs, **kw): raise RuntimeError("断网")
@@ -196,44 +196,46 @@ def test_author_flags_fallback(client, monkeypatch):
     _seed(client)
     with dbmod.db_conn(client.app.state.db_path) as c:
         with pytest.raises(RuntimeError):
-            gen.ensure_author_flags(c)
+            gen.ensure_author_meta(c)
     with dbmod.db_conn(client.app.state.db_path) as c:
-        flags = dict(c.execute("SELECT name, chinese FROM authors").fetchall())
+        flags = dict(c.execute("SELECT name, chinese || '|' || nationality FROM authors").fetchall())
     assert flags and all(v is None for v in flags.values())
 
-def test_author_flags_llm_success(client, monkeypatch):
-    """LLM 正常返回 → 判定结果落库，返回判定条数。"""
+def test_author_meta_llm_success(client, monkeypatch):
+    """LLM 正常返回 → 国籍+标志落库；响应里漏掉的名字走启发式兜底（中文名→中国/华人）。"""
     from app import db as dbmod
     from app.ai import gen
     monkeypatch.setattr(gen.llm, "chat",
-                        lambda msgs, **kw: '[{"name":"余华","cn":1},{"name":"阿尔贝·加缪","cn":0},'
-                                           '{"name":"宝春溪","cn":1}]')
+                        lambda msgs, **kw: '[{"name":"余华","country":"中国","cn":1},'
+                                           '{"name":"阿尔贝·加缪","country":"法国","cn":0}]')
     _seed(client)
     with dbmod.db_conn(client.app.state.db_path) as c:
-        judged = gen.ensure_author_flags(c)
+        judged = gen.ensure_author_meta(c)
     assert judged == 3
     with dbmod.db_conn(client.app.state.db_path) as c:
-        flags = dict(c.execute("SELECT name, chinese FROM authors").fetchall())
-    assert flags == {"余华": 1, "阿尔贝·加缪": 0, "宝春溪": 1}
+        rows = dict((r["name"], (r["nationality"], r["chinese"])) for r in
+                    c.execute("SELECT name, nationality, chinese FROM authors"))
+    assert rows == {"余华": ("中国", 1), "阿尔贝·加缪": ("法国", 0), "宝春溪": ("中国", 1)}
 
-def test_author_flags_routes(client, monkeypatch):
+def test_author_meta_routes(client, monkeypatch):
     from app import db as dbmod
     from app.ai import gen
     _seed(client)
     # 状态：3 位作者全部未判定
-    assert client.get("/api/ai/author-flags").json() == {"total": 3, "pending": 3}
+    assert client.get("/api/ai/author-meta").json() == {"total": 3, "pending": 3}
     # 断网 → POST 502，不写库
     def boom(msgs, **kw): raise RuntimeError("断网")
     monkeypatch.setattr(gen.llm, "chat", boom)
-    assert client.post("/api/ai/author-flags").status_code == 502
-    assert client.get("/api/ai/author-flags").json()["pending"] == 3
+    assert client.post("/api/ai/author-meta").status_code == 502
+    assert client.get("/api/ai/author-meta").json()["pending"] == 3
     # 成功 → judged + pending 归零；再 POST 幂等（无 pending，不调模型）
     calls = []
     monkeypatch.setattr(gen.llm, "chat",
                         lambda msgs, **kw: calls.append(1) or
-                        '[{"name":"余华","cn":1},{"name":"阿尔贝·加缪","cn":0},{"name":"宝春溪","cn":1}]')
-    assert client.post("/api/ai/author-flags").json() == {"total": 3, "pending": 0, "judged": 3}
-    assert client.post("/api/ai/author-flags").json()["judged"] == 0
+                        '[{"name":"余华","country":"中国","cn":1},{"name":"阿尔贝·加缪","country":"法国","cn":0},'
+                        '{"name":"宝春溪","country":"中国","cn":1}]')
+    assert client.post("/api/ai/author-meta").json() == {"total": 3, "pending": 0, "judged": 3}
+    assert client.post("/api/ai/author-meta").json()["judged"] == 0
     assert len(calls) == 1
 
 def test_spectrum_is_pure_read(client, monkeypatch):
@@ -249,15 +251,25 @@ def test_spectrum_is_pure_read(client, monkeypatch):
         flags = dict(c.execute("SELECT name, chinese FROM authors").fetchall())
     assert all(v is None for v in flags.values())
 
-def test_cli_flags_no_pending(tmp_path):
-    """CLI python -m app.ai.gen --flags：无 pending 时不调模型、正常退出（--db 指向临时库，不碰真库）。"""
+def test_stats_nationalities(client):
+    from app import db as dbmod
+    _seed(client)
+    with dbmod.db_conn(client.app.state.db_path) as c:
+        c.execute("UPDATE authors SET nationality='法国' WHERE name LIKE '%加缪%'")
+        c.commit()
+    d = {r["key"]: r for r in client.get("/api/stats/nationalities").json()}
+    assert d["法国"] == {"key": "法国", "authors": 1, "books": 1}
+    assert d["未知"]["authors"] == 2               # 未判定的归"未知"
+
+def test_cli_meta_no_pending(tmp_path):
+    """CLI python -m app.ai.gen --meta：无 pending 时不调模型、正常退出（--db 指向临时库，不碰真库）。"""
     import json, subprocess, sys
     from pathlib import Path
     from app import db as dbmod
     dbp = tmp_path / "cli.db"
     with dbmod.db_conn(dbp) as c:
         dbmod.init_db(c)
-    r = subprocess.run([sys.executable, "-m", "app.ai.gen", "--flags", "--db", str(dbp)],
+    r = subprocess.run([sys.executable, "-m", "app.ai.gen", "--meta", "--db", str(dbp)],
                        capture_output=True, text=True, cwd=Path(__file__).parent.parent)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == {"ok": True, "judged": 0, "total": 0, "pending": 0}

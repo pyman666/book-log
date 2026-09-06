@@ -43,19 +43,32 @@ function bareChart(el) { const c = echarts.init(el); charts.push(c); return c; }
 async function dashboard() {
   charts.forEach(c => c.dispose()); charts = [];
   view.innerHTML = `
-    <div class="cards" id="cards"></div>
+    <div class="ledger" id="ledger"></div>
     <div class="grid2">
-      <section class="panel wide"><h2>剁手日历（一天买几本）<select id="heat-year" class="inline right"></select></h2>
+      <section class="panel wide"><h2><span class="no">壹</span><span class="t">书架</span><span class="hint">点封面进详情，← → 翻书</span>
+        <select id="shelf-year" class="inline right"></select><span id="shelf-stat" class="hint right"></span></h2>
+        <div class="shelf">
+          <button id="cf-prev" class="cf-arrow prev" aria-label="上一本">‹</button>
+          <div class="cf-viewport"><div class="cf-stage" id="cf-stage"><div class="cf-floor"></div></div></div>
+          <button id="cf-next" class="cf-arrow next" aria-label="下一本">›</button>
+        </div>
+        <div class="cf-cap"><span class="cf-title" id="cf-title"></span><span class="cf-meta" id="cf-meta"></span></div>
+        <div class="cf-pos" id="cf-pos"></div></section>
+      <section class="panel wide"><h2><span class="no">贰</span><span class="t">剁手日历</span><span class="hint">一天买几本</span><select id="heat-year" class="inline right"></select></h2>
         <div class="heat-wrap"><div class="chart" id="ch-heat"></div><div class="heat-stat" id="heat-stat"></div></div></section>
-      <section class="panel"><h2>口味光谱</h2><div id="spectrum-flags"></div><div class="chart" id="ch-spectrum"></div></section>
-      <section class="panel"><h2>评分 × 重要度（气泡=盈亏，红=亏）</h2><div class="chart" id="ch-quadrant"></div></section>
-      <section class="panel"><h2>分类目净花费（元，红=亏 蓝=赚）</h2><div class="chart" id="ch-cat"></div></section>
-      <section class="panel"><h2>年度读书量</h2><div class="chart" id="ch-year"></div></section>
-      <section class="panel"><h2>作者分布（Top 10）</h2><div class="chart" id="ch-author"></div></section>
-      <section class="panel"><h2>出版社分布（Top 10）</h2><div class="chart" id="ch-publisher"></div></section>
-      <section class="panel wide"><h2>封面墙 <select id="wall-year" class="inline right"></select><span id="wall-stat" class="sub right"></span></h2><div class="wall" id="wall"></div></section>
-      <section class="panel wide"><h2>AI 年度画像 <select id="ai-year" class="inline right"></select>
+      <section class="panel span7"><h2><span class="no">叁</span><span class="t">口味光谱</span><span class="hint">读什么 · 什么语言 · 读完没</span></h2>
+        <div id="spectrum-flags"></div><div class="chart" id="ch-spectrum"></div></section>
+      <section class="panel span5"><h2><span class="no">肆</span><span class="t">评分 × 重要度</span><span class="hint">气泡=盈亏，红=亏 绿=赚</span></h2>
+        <div class="chart" id="ch-quadrant"></div></section>
+      <section class="panel"><h2><span class="no">伍</span><span class="t">分类目净花费</span><span class="hint">元，红=亏 绿=赚</span></h2><div class="chart" id="ch-cat"></div></section>
+      <section class="panel"><h2><span class="no">陆</span><span class="t">年度读书量</span></h2><div class="chart" id="ch-year"></div></section>
+      <section class="panel"><h2><span class="no">柒</span><span class="t">作者国籍</span><span class="hint">按关联书数 Top 12</span></h2><div class="chart" id="ch-nat"></div></section>
+      <section class="panel"><h2><span class="no">捌</span><span class="t">作者分布</span><span class="hint">Top 10</span></h2><div class="chart" id="ch-author"></div></section>
+      <section class="panel"><h2><span class="no">玖</span><span class="t">出版社分布</span><span class="hint">Top 10</span></h2><div class="chart" id="ch-publisher"></div></section>
+      <section class="panel wide letter"><h2><span class="no">拾</span><span class="t">AI 年度画像</span>
+        <select id="ai-year" class="inline right"></select>
         <button id="ai-gen" class="ghost right">生成</button><button id="ai-refresh" class="ghost right" title="重新生成">↻</button></h2>
+        <div class="orn" aria-hidden="true">❦</div>
         <div id="ai-yearly" class="md"><span class="muted">点“生成”，AI 读完你那一年的书和笔记后给你画像（首次约半分钟）</span></div></section>
     </div>`;
   const [s, cat, year, author, publisher] = await Promise.all([
@@ -65,12 +78,12 @@ async function dashboard() {
     api("/api/stats/group?by=author&agg=count"),
     api("/api/stats/group?by=publisher&agg=count"),
   ]);
-  const card = (k, v, sub, cls) =>
-    `<div class="card"><span class="k">${k}</span><span class="v ${cls || ""}">${v}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</div>`;
-  $("#cards").innerHTML =
-    card("在库", s.in_lib) + card("已售", s.sold) + card("读完", s.finished, "progress=100") +
-    card("净花费（元）", fmt(s.net), "正=亏 负=赚", s.net > 0 ? "bad" : s.net < 0 ? "good" : "") +
-    card("其中亏损（元）", fmt(s.loss)) + card("其中净赚（元）", fmt(s.gain)) + card("有价书数", s.priced);
+  const lg = (k, v, sub) =>
+    `<div class="lg"><span class="k">${k}</span><span class="v">${v}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</div>`;
+  $("#ledger").innerHTML =
+    `<div class="lg hero"><span class="k">净花费（元）</span><span class="v ${s.net > 0 ? "bad" : s.net < 0 ? "good" : ""}">${fmt(s.net)}</span><span class="sub">正=亏 负=赚</span></div>` +
+    lg("在库", s.in_lib) + lg("已售", s.sold) + lg("读完", s.finished, "读完一本划掉一本") +
+    lg("其中亏损", fmt(s.loss)) + lg("其中净赚", fmt(s.gain)) + lg("有价书数", s.priced);
 
   // 分类目净花费：diverging 横向条形（按值升序，最大在上）
   const catData = cat.filter(x => x.value != null).sort((a, b) => a.value - b.value);
@@ -119,7 +132,7 @@ async function dashboard() {
         formatter: p => p.value } }],
   });
   // 新面板：失败不互相阻塞（如 LLM 配额、封面未抓完）
-  [panelHeatmap, panelSpectrum, panelQuadrant, panelCovers, panelYearlyAI]
+  [panelHeatmap, panelSpectrum, panelQuadrant, panelNationalities, panelShelf, panelYearlyAI]
     .forEach(f => f().catch(e => console.warn(f.name, e)));
 }
 
@@ -127,8 +140,12 @@ async function dashboard() {
 async function panelHeatmap() {
   const daily = await api("/api/stats/daily");
   const years = [...new Set(Object.keys(daily).map(k => k.slice(0, 4)))].sort().reverse();
+  // 默认选登记最多的年份（最新年份可能只有几本，打开就空）
+  const days = y => Object.keys(daily).filter(k => k.startsWith(y)).length;
+  const defaultYear = years.slice().sort((a, b) => days(b) - days(a))[0];
   const sel = $("#heat-year");
   sel.innerHTML = years.map(y => `<option>${y}</option>`).join("");
+  sel.value = defaultYear;
   const c = bareChart($("#ch-heat"));   // 只建一次实例；换年只更新 option，避免重复 init 告警
   const draw = y => {
     const pts = Object.entries(daily).filter(([d]) => d.startsWith(y))
@@ -154,7 +171,7 @@ async function panelHeatmap() {
       (peak ? hstat(`最狠一天 ${peak[0].slice(5)}`, `${peak[1]} 本`) : "");
   };
   sel.onchange = () => draw(sel.value);
-  draw(years[0]);
+  draw(defaultYear);
 }
 const hstat = (k, v) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
 
@@ -163,7 +180,7 @@ const CAT = ["--cat-1", "--cat-2", "--cat-3", "--cat-4", "--cat-5", "--cat-6", "
 
 async function panelSpectrum() {
   // 纯读：spectrum 不再阻塞等 LLM；未判定时照常画（语言轴启发式兜底）+ 提示条给显式触发入口
-  const [axes, st] = await Promise.all([api("/api/stats/spectrum"), api("/api/ai/author-flags")]);
+  const [axes, st] = await Promise.all([api("/api/stats/spectrum"), api("/api/ai/author-meta")]);
   drawSpectrum(axes);
   renderFlagsChip(st.pending);
 }
@@ -213,7 +230,7 @@ function renderFlagsChip(pending) {
     flagsBusy = true; renderFlagsChip(pending);
     let st;
     try {
-      st = await api("/api/ai/author-flags", { method: "POST" });
+      st = await api("/api/ai/author-meta", { method: "POST" });
     } catch (e) {
       toast(e.message, true);
     } finally {
@@ -222,6 +239,21 @@ function renderFlagsChip(pending) {
     if (st) drawSpectrum(await api("/api/stats/spectrum"));   // 成功：语言轴换成 LLM 判定值
     renderFlagsChip(st ? st.pending : pending);
   };
+}
+
+async function panelNationalities() {
+  const rows = (await api("/api/stats/nationalities")).slice(0, 12).reverse();
+  baseChart($("#ch-nat")).setOption({
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" },
+      formatter: ps => { const r = rows[ps[0].dataIndex];
+        return `${r.key}：${r.authors} 位作者 · 关联 ${r.books} 本书`; } },
+    xAxis: { type: "value" },
+    yAxis: { type: "category", data: rows.map(r => r.key),
+      axisLabel: { color: cssVar("--text-secondary") } },
+    series: [{ type: "bar", barMaxWidth: 14, data: rows.map(r => r.books),
+      itemStyle: { color: cssVar("--series-2"), borderRadius: 3 },
+      label: { show: true, position: "right", color: cssVar("--text-secondary") } }],
+  });
 }
 
 async function panelQuadrant() {
@@ -234,7 +266,8 @@ async function panelQuadrant() {
     tooltip: { confine: true,
       formatter: p => `${p.data.title}\n评分 ${p.data.value[0]} · 重要度 ${p.data.value[1]}` +
         (p.data.price != null ? `\n${p.data.price >= 0 ? "亏" : "赚"} ¥${Math.abs(p.data.price).toFixed(2)}` : "\n无价格") },
-    xAxis: { type: "value", min: 1, max: 10, name: "评分", nameTextStyle: { color: cssVar("--muted") } },
+    xAxis: { type: "value", min: 1, max: 10, name: "评分", nameLocation: "middle", nameGap: 26,
+      nameTextStyle: { color: cssVar("--muted") } },
     yAxis: { type: "value", min: 0, max: 1, name: "重要度", nameTextStyle: { color: cssVar("--muted") } },
     series: [{
       type: "scatter",
@@ -249,30 +282,107 @@ async function panelQuadrant() {
       markLine: ar == null ? undefined : { silent: true, symbol: "none",
         label: { color: cssVar("--muted"), fontSize: 10 },
         lineStyle: { type: "dashed", color: cssVar("--axis") },
-        data: [{ xAxis: +ar.toFixed(1), label: "平均评分" }, { yAxis: +ai.toFixed(2), label: "平均重要度" }] } },
+        data: [{ xAxis: +ar.toFixed(1), label: { formatter: "平均评分", position: "end" } },
+               { yAxis: +ai.toFixed(2), label: { formatter: "平均重要度", position: "start" } }] } },
     ],
   });
   c.on("click", p => { if (p.data && p.data.id) location.hash = `#/book/${p.data.id}`; });
 }
 
-async function panelCovers() {
+// ---------- 书架（iPod Cover Flow 式 3D） ----------
+const CF_OFF = [0, 150, 262, 348, 412, 462];        // 距中心各档的 x 偏移
+const CF_Z = [80, -110, -240, -350, -440, -500];    // 逐档后退
+const CF_OP = [1, .92, .78, .6, .45, .3];           // 逐档变淡
+let cfAll = [], cfList = [], cfCenter = 0;
+const cfNodes = new Map();
+
+async function panelShelf() {
   const data = await api("/api/stats/wall");
-  const withCover = data.items;
-  $("#wall-stat").textContent = `已抓封面 ${withCover.length}/${data.total}`;
-  const years = [...new Set(withCover.map(b => yearOf(b.created)))].filter(y => y !== "—").sort().reverse();
-  const sel = $("#wall-year");
+  cfAll = data.items.slice().sort(
+    (a, b) => (a.created || "").localeCompare(b.created || "") || a.id - b.id);
+  $("#shelf-stat").textContent = `已抓封面 ${cfAll.length}/${data.total}`;
+  const years = [...new Set(cfAll.map(b => yearOf(b.created)))].filter(y => y !== "—").sort().reverse();
+  const sel = $("#shelf-year");
   sel.innerHTML = `<option value="">全部</option>` + years.map(y => `<option>${y}</option>`).join("");
-  const draw = y => {
-    const bs = withCover.filter(b => !y || yearOf(b.created) === y)
-      .sort((a, b) => (b.rating || 0) - (a.rating || 0));
-    $("#wall").innerHTML = bs.map(b => `
-      <figure onclick="location.hash='#/book/${b.id}'">
-        <img loading="lazy" src="${b.cover_url}" alt="" onerror="this.parentElement.style.opacity=.15">
-        <figcaption><span class='wt'>${b.title}</span>${b.rating ? `<span class='wr'>☆${(b.rating / 2).toFixed(1)}</span>` : ""}</figcaption>
-      </figure>`).join("") || `<p class='muted'>这年没书（或封面还在抓）</p>`;
-  };
-  sel.onchange = () => draw(sel.value);
-  draw("");
+  sel.onchange = () => setShelfList(sel.value);
+  $("#cf-prev").onclick = () => cfNav(-1);
+  $("#cf-next").onclick = () => cfNav(1);
+  setShelfList("");
+}
+
+function setShelfList(year) {
+  cfList = year ? cfAll.filter(b => yearOf(b.created) === year) : cfAll.slice();
+  cfCenter = 0;
+  $("#cf-stage").querySelectorAll(".cf-item").forEach(el => el.remove());
+  cfNodes.clear();
+  if (!cfList.length) {
+    $("#cf-title").textContent = "";
+    $("#cf-meta").innerHTML = `<span class="muted">这年没书（或封面还在抓）</span>`;
+    $("#cf-pos").textContent = "";
+    $("#cf-prev").disabled = $("#cf-next").disabled = true;
+    return;
+  }
+  cfRender();
+}
+
+function cfNav(d) {
+  const n = cfCenter + d;
+  if (n < 0 || n >= cfList.length) return;
+  cfCenter = n;
+  cfRender();
+}
+
+function cfRender() {
+  const stage = $("#cf-stage");
+  const seen = new Set();
+  for (let off = -5; off <= 5; off++) {
+    const i = cfCenter + off;
+    if (i < 0 || i >= cfList.length) continue;
+    const b = cfList[i];
+    let el = cfNodes.get(b.id);
+    if (!el) {
+      el = document.createElement("figure");
+      el.className = "cf-item";
+      el.innerHTML = `<img src="${b.cover_url}" alt="${b.title}">`;
+      const img = el.firstElementChild;
+      img.onerror = () => {   // CDN 偶发拒绝：退避重试两次，再不行淡显占位
+        if (!img.dataset.r || +img.dataset.r < 2) {
+          img.dataset.r = +img.dataset.r + 1;
+          setTimeout(() => { img.src = b.cover_url; }, 600 * img.dataset.r);
+        } else {
+          img.style.opacity = .25;
+        }
+      };
+      el.onclick = () => {   // 每次点击现读下标（节点跨翻页复用，off 会过期）
+        const cur = +el.dataset.i;
+        if (cur === cfCenter) location.hash = `#/book/${b.id}`;
+        else { cfCenter = cur; cfRender(); }
+      };
+      cfNodes.set(b.id, el);
+      stage.appendChild(el);
+    }
+    const a = Math.abs(off);
+    el.dataset.i = i;
+    el.style.transform = `translateX(${off < 0 ? -CF_OFF[a] : CF_OFF[a]}px)` +
+      ` translateZ(${CF_Z[a]}px) rotateY(${off === 0 ? 0 : (off < 0 ? 58 : -58)}deg)`;
+    el.style.opacity = CF_OP[a];
+    el.style.zIndex = 100 - a * 10;
+    el.classList.toggle("cf-active", off === 0);
+    seen.add(b.id);
+  }
+  cfNodes.forEach((el, id) => { if (!seen.has(id)) { el.remove(); cfNodes.delete(id); } });
+  const b = cfList[cfCenter];
+  const title = $("#cf-title");
+  title.textContent = b.title;
+  title.onclick = () => location.hash = `#/book/${b.id}`;
+  const parts = [];
+  const y = yearOf(b.created);
+  if (y !== "—") parts.push(y);
+  if (b.rating) parts.push(`<span class="wr">★${(b.rating / 2).toFixed(1)}</span>`);
+  $("#cf-meta").innerHTML = parts.join(" · ");
+  $("#cf-pos").textContent = `${cfCenter + 1} / ${cfList.length}`;
+  $("#cf-prev").disabled = cfCenter === 0;
+  $("#cf-next").disabled = cfCenter === cfList.length - 1;
 }
 
 async function panelYearlyAI() {
@@ -546,7 +656,19 @@ function route() {
 
 window.addEventListener("hashchange", route);
 window.addEventListener("resize", () => charts.forEach(c => c.resize()));
+// 系统主题切换时重建当前视图：图表颜色是 init 时读的 token，CSS 变量变了要重画
+window.matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => route());
+// 书架键盘翻页（焦点在输入控件时不抢）
+document.addEventListener("keydown", e => {
+  if (!$("#cf-stage")) return;
+  const t = document.activeElement;
+  if (t && /INPUT|SELECT|TEXTAREA/.test(t.tagName)) return;
+  if (e.key === "ArrowLeft") cfNav(-1);
+  else if (e.key === "ArrowRight") cfNav(1);
+});
 window.addEventListener("load", () => {
+  $("#tagline").textContent =
+    `本地读书笔记账本 · ${new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" })}`;
   $("#btn-sync").onclick = async () => {
     try {
       const r = await api("/api/sync", { method: "POST" });

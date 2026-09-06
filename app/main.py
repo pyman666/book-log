@@ -204,18 +204,18 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
     @app.get("/api/stats/spectrum")
     def stats_spectrum(request: Request):
         with conn_of(request) as conn:
-            return analytics.taste_spectrum(conn)   # 纯读；国籍判定显式触发，见 /api/ai/author-flags
+            return analytics.taste_spectrum(conn)   # 纯读；国籍判定显式触发，见 /api/ai/author-meta
 
-    @app.get("/api/ai/author-flags")
-    def author_flags_status(request: Request):
+    @app.get("/api/ai/author-meta")
+    def author_meta_status(request: Request):
         with conn_of(request) as conn:
             return gen.flag_status(conn)
 
-    @app.post("/api/ai/author-flags")
-    def author_flags_run(request: Request):
+    @app.post("/api/ai/author-meta")
+    def author_meta_run(request: Request):
         with conn_of(request) as conn:
             try:
-                judged = gen.ensure_author_flags(conn)
+                judged = gen.ensure_author_meta(conn)
             except Exception as e:
                 raise HTTPException(502, f"模型调用失败: {type(e).__name__}: {e}")
             return {**gen.flag_status(conn), "judged": judged}
@@ -224,6 +224,11 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
     def stats_quadrant(request: Request):
         with conn_of(request) as conn:
             return analytics.quadrant(conn)
+
+    @app.get("/api/stats/nationalities")
+    def stats_nationalities(request: Request):
+        with conn_of(request) as conn:
+            return analytics.nationality_top(conn)
 
     @app.get("/api/stats/wall")
     def stats_wall(request: Request):
