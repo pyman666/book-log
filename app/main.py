@@ -242,13 +242,14 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
                 raise HTTPException(404, "不存在")
             if not row["douban_id"]:
                 raise HTTPException(400, "无豆瓣号，无法抓封面")
+            isbn = conn.execute("SELECT isbn FROM books WHERE id=?", (bid,)).fetchone()["isbn"]
             try:
-                url = douban.fetch_cover_url(row["douban_id"])
+                path = douban.fetch_cover_local(row["douban_id"], isbn, covers_dir)
             except RuntimeError as e:
                 raise HTTPException(502, str(e))
-            conn.execute("UPDATE books SET cover_url = ? WHERE id = ?", (url, bid))
+            conn.execute("UPDATE books SET cover_url = ? WHERE id = ?", (path, bid))
             conn.commit()
-            return {"cover_url": url}
+            return {"cover_url": path}
 
     # ---------- sync & git ----------
     @app.post("/api/sync")
@@ -274,6 +275,9 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
     static_dir = Path(__file__).parent / "static"
     if static_dir.is_dir():
         app.mount("/static", StaticFiles(directory=static_dir), name="static")
+    covers_dir = Path(root) / "raw" / "covers"   # 本地封面库（app.douban --localize/--link 填充）
+    covers_dir.mkdir(parents=True, exist_ok=True)
+    app.mount("/covers", StaticFiles(directory=covers_dir), name="covers")
 
     @app.get("/", include_in_schema=False)
     def index():

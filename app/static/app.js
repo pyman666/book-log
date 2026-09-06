@@ -4,6 +4,9 @@ const view = $("#view");
 let charts = [];
 
 const cssVar = n => getComputedStyle(document.body).getPropertyValue(n).trim();
+
+// 豆瓣默认占位图(book-static)视觉上是灰盒，不如退回书名卡；空串一律视为无封面
+const realCover = u => (u && !u.includes("book-static") && !u.startsWith("null")) ? u : "";
 const fmt = (v, d = 2) => (v == null ? "—" : Number(v).toFixed(d));
 const yearOf = s => ((s || "").match(/\b(19\d{2}|20\d{2})\b/) || ["—"])[0];
 const splitList = s => (s || "").split(/[,，、]/).map(x => x.trim()).filter(Boolean);
@@ -342,7 +345,7 @@ function cfRender() {
     if (!el) {
       el = document.createElement("figure");
       el.className = "cf-item";
-      el.innerHTML = `<img src="${b.cover_url}" alt="${b.title}">`;
+      el.innerHTML = `<img src="${realCover(b.cover_url) || "none"}" alt="${b.title}">`;
       const img = el.firstElementChild;
       img.onerror = () => {   // CDN 偶发拒绝：退避重试两次，再不行淡显占位
         if (!img.dataset.r || +img.dataset.r < 2) {
@@ -573,7 +576,7 @@ async function bookDetail(id) {
   const dbk = b.douban_id
     ? `<a class="obs" href="https://book.douban.com/subject/${b.douban_id}/" target="_blank" rel="noopener">🌐 豆瓣</a>`
     : "";
-  const coverBtn = (b.douban_id && !b.cover_url)
+  const coverBtn = (b.douban_id && !realCover(b.cover_url))
     ? `<button id="d-cover" class="ghost" type="button" title="从豆瓣抓封面">抓封面</button>` : "";
   view.innerHTML = `
     <div class="detail">
@@ -590,7 +593,7 @@ async function bookDetail(id) {
       ${b.file_path ? `<section class="panel wide"><h2>AI 读后摘要 <button id="sum-refresh" class="ghost right" title="重新生成">↻</button></h2>
         <div id="sum" class="md"><span class="muted"><span class="spin"></span>生成中…（首次约十几秒）</span></div></section>` : ""}
     </div>`;
-  if (b.douban_id && !b.cover_url) {
+  if (b.douban_id && !realCover(b.cover_url)) {
     $("#d-cover").onclick = async () => {
       const btn = $("#d-cover");
       btn.disabled = true; btn.textContent = "抓取中…";

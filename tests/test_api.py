@@ -318,13 +318,22 @@ def test_cli_meta_no_pending(tmp_path):
     assert json.loads(r.stdout) == {"ok": True, "judged": 0, "total": 0, "pending": 0}
 
 def test_cover_endpoint(client, monkeypatch):
+    """单本抓封面：有 isbn → 下载落盘转 /covers/；占位图/无 isbn → 只回热链。"""
     import app.douban as dmod
-    monkeypatch.setattr(dmod, "fetch_cover_url", lambda i, **k: f"//c{i}")
+    monkeypatch.setattr(dmod, "fetch_cover_url",
+                        lambda i, **k: f"https://img3.doubanio.com/view/subject/s/public/s{i}.jpg")
+    monkeypatch.setattr(dmod, "_download", lambda u, **k: b"bytes")
     b0 = client.post("/api/books", json={"title": "无豆瓣号"}).json()
     assert client.post(f"/api/books/{b0}/cover").status_code == 400
-    b1 = client.post("/api/books", json={"title": "有豆瓣号", "douban_id": "999"}).json()
-    assert client.post(f"/api/books/{b1}/cover").json() == {"cover_url": "//c999"}
-    assert client.get(f"/api/books/{b1}").json()["cover_url"] == "//c999"
+    b1 = client.post("/api/books", json={"title": "有书", "douban_id": "999", "isbn": "978999"}).json()
+    assert client.post(f"/api/books/{b1}/cover").json() == {"cover_url": "/covers/978999.jpg"}
+    assert client.get(f"/api/books/{b1}").json()["cover_url"] == "/covers/978999.jpg"
+    assert (client.app.state.root / "raw/covers/978999.jpg").read_bytes() == b"bytes"
+    # 豆瓣无真封面（返回占位图）→ 不存脏图，回热链交 --link 人工补
+    monkeypatch.setattr(dmod, "fetch_cover_url",
+                        lambda i, **k: "https://img1.doubanio.com/cuphead/book-static/x.gif")
+    b2 = client.post("/api/books", json={"title": "占位", "douban_id": "888", "isbn": "978888"}).json()
+    assert client.post(f"/api/books/{b2}/cover").json()["cover_url"].startswith("https://")
 
 def test_cover_network_error_is_502(client, monkeypatch):
     """httpx 网络异常（超时/断连）被包成 RuntimeError → 路由 502，而不是裸 500。"""

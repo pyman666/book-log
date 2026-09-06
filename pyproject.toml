@@ -1,6 +1,6 @@
 [project]
 name = "book-log"
-version = "0.1.9"
+version = "0.1.10"
 description = "本地书库：SQLite 元数据 + FastAPI 网页仪表盘，md 存正文，git 同步"
 requires-python = ">=3.10"
 dependencies = [
