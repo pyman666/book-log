@@ -1,6 +1,6 @@
 # book-log —— 本地书库
 
-元数据在 SQLite（`books.db`），读书笔记在 Markdown（`raw/`），git 同步，网页查看与编辑。
+元数据在 SQLite（`books.db`），读书笔记在 Markdown（`raw/books/`），git 同步，网页查看与编辑。
 
 ## 启动
 
@@ -16,9 +16,9 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 | 操作 | 位置 |
 |------|------|
 | 加书 / 改价格·评分·进度·豆瓣编号 / 标记售出 / 删除 | 网页 |
-| 写读后感、摘抄 | Obsidian（vault 根 = 本仓库，内容放 `raw/`） |
+| 写读后感、摘抄 | Obsidian（vault 根 = 本仓库，笔记一律放 `raw/books/`） |
 | 跳豆瓣条目页 | 书单书名后的 🌐 / 详情页「🌐 豆瓣」（由 `douban_id` 拼 URL） |
-| raw/ 与数据库对账 | 网页右上 **Sync** |
+| `raw/books/` 与数据库对账 | 网页右上 **Sync** |
 | 保存变更进 git | `git add -A && git commit`（push 手动执行） |
 
 ## 约定
@@ -27,10 +27,13 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 - 进度：100=读完，0=未读，-1=售出；评分 1~10
 - 同一本书多个批次（不同时间买/卖）= 多条记录，不要合并
 - **同名同作者 = 同一本书**：不同版本各一行元数据（ISBN、douban_id 各不同），
-  共用一个 `raw/书名.md`；同名不同作者是两本书，各配各的 md，勿合并
-- 售出书的笔记与在库版本放同一个 md（`raw/sold/` 已废弃并回 `raw/`）
+  共用一个 `raw/books/书名.md`；**同名不同作者 = 两本书**，各配各的 md，勿合并
+- 真撞名（如父与子·屠格涅夫 vs 父与子·卜劳恩）：裸 `书名.md` 归 id 序第一条同名记录，
+  另一本命名 **`书名（作者）.md`**，Sync 会剥尾括号按「书名+作者」二轮精确挂接（不会造污染存根）；
+  md 用**书名**命名不用 isbn：封面是版本级（一版一图，isbn 天然唯一），笔记是作品级（一本书 N 版本共用一篇）
+- 售出书的笔记与在库版本放同一个 md（`raw/sold/` 已废弃并回 `raw/books/`）
 - md 只放自己的笔记，**不写 frontmatter、不写豆瓣链接头**（subject 号存 db 的 `douban_id` 列）
-- 没留过字的书 `raw/` 里没有文件（262 本空壳已清理），前端标"无正文"
+- 没留过字的书 `raw/books/` 里没有文件（262 本空壳已清理），前端标"无正文"
 - 分类/作者/出版社可多个（逗号分隔）；平台单值
 - 新增 md 后点一次 Sync，数据库会自动建存根记录
 
@@ -53,7 +56,8 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 ## 目录与存档
 
-- `raw/*.md` —— 有笔记的书（93 个文件），Obsidian 直接编辑
+- `raw/books/*.md` —— 有笔记的书（93 个文件，文件名 = 书名，撞名书加（作者）后缀），Obsidian 直接编辑
+- `raw/covers/<isbn>.(jpg|png|webp|gif)` —— 本地封面库（文件名 = ISBN，豆瓣没有的手工补）
 - `raw/notion-export/` —— Notion 原始导出**只读存档**（图书页 495 + 作者/出版社等维度页），
   是部分售出书笔记的唯一副本，不要改动或删除
 - `_trash/` —— 旧 Dataview 索引页归档
@@ -62,7 +66,7 @@ uv run uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 `books.db` 是二进制文件，直接提交 git。两台设备都改过再 pull 会冲突：
 保留较新设备的那份（`git checkout --theirs books.db`），解决后提交。
-万一数据损坏，可从 `raw/` + `raw/notion-export/` 恢复源文件后
+万一数据损坏，可从 `raw/books/` + `raw/notion-export/` 恢复源文件后
 `python -m app.migrate --force` 重建。
 
 ## 常用命令

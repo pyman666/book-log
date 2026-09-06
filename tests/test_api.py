@@ -47,8 +47,9 @@ def test_list_filters(client):
 
 
 def test_content_endpoint(client, tmp_path):
-    (tmp_path / "raw" / "有正文.md").write_text("# 标题\n正文内容", encoding="utf-8")
-    bid = client.post("/api/books", json={"title": "有正文", "file_path": "raw/有正文.md"}).json()
+    (tmp_path / "raw" / "books").mkdir(parents=True)
+    (tmp_path / "raw" / "books" / "有正文.md").write_text("# 标题\n正文内容", encoding="utf-8")
+    bid = client.post("/api/books", json={"title": "有正文", "file_path": "raw/books/有正文.md"}).json()
     r = client.get(f"/api/books/{bid}/content")
     assert r.status_code == 200 and "正文内容" in r.text
     bid2 = client.post("/api/books", json={"title": "无正文"}).json()
@@ -57,11 +58,12 @@ def test_content_endpoint(client, tmp_path):
 
 def test_content_strips_douban_header(client, tmp_path):
     hdr = '> **[《📖 某书](https://book.douban.com/subject/123/)**\n> 内容简介…\n\n'
-    (tmp_path / "raw" / "仅豆瓣头.md").write_text(hdr, encoding="utf-8")
-    b1 = client.post("/api/books", json={"title": "仅豆瓣头", "file_path": "raw/仅豆瓣头.md"}).json()
+    (tmp_path / "raw" / "books").mkdir(parents=True)
+    (tmp_path / "raw" / "books" / "仅豆瓣头.md").write_text(hdr, encoding="utf-8")
+    b1 = client.post("/api/books", json={"title": "仅豆瓣头", "file_path": "raw/books/仅豆瓣头.md"}).json()
     assert client.get(f"/api/books/{b1}/content").status_code == 404
-    (tmp_path / "raw" / "豆瓣头加笔记.md").write_text(hdr + "# 我的笔记\n很好看", encoding="utf-8")
-    b2 = client.post("/api/books", json={"title": "豆瓣头加笔记", "file_path": "raw/豆瓣头加笔记.md"}).json()
+    (tmp_path / "raw" / "books" / "豆瓣头加笔记.md").write_text(hdr + "# 我的笔记\n很好看", encoding="utf-8")
+    b2 = client.post("/api/books", json={"title": "豆瓣头加笔记", "file_path": "raw/books/豆瓣头加笔记.md"}).json()
     r = client.get(f"/api/books/{b2}/content")
     assert r.status_code == 200 and "我的笔记" in r.text and "douban" not in r.text
 
@@ -220,8 +222,9 @@ def test_list_year_filter(client):
 def test_summary_endpoint(client, tmp_path, monkeypatch):
     from app.ai import gen
     monkeypatch.setattr(gen.llm, "chat", lambda msgs, **kw: "一句话摘要。")
-    (tmp_path / "raw" / "活着.md").write_text("福贵的一生…", encoding="utf-8")
-    bid = client.post("/api/books", json={"title": "活着", "file_path": "raw/活着.md"}).json()
+    (tmp_path / "raw" / "books").mkdir(parents=True)
+    (tmp_path / "raw" / "books" / "活着.md").write_text("福贵的一生…", encoding="utf-8")
+    bid = client.post("/api/books", json={"title": "活着", "file_path": "raw/books/活着.md"}).json()
     assert client.get(f"/api/books/{bid}/summary").json() == {"summary": "一句话摘要。", "cached": False}
     assert client.get(f"/api/books/{bid}/summary").json()["cached"] is True   # 命中缓存
     bno = client.post("/api/books", json={"title": "无笔记"}).json()
@@ -370,8 +373,9 @@ def test_yearly_reads_from_app_root(client, tmp_path, monkeypatch):
     def fake(msgs, **kw):
         prompts.append(msgs[-1]["content"]); return "画像文本"
     monkeypatch.setattr(gen.llm, "chat", fake)
-    (tmp_path / "raw" / "根探针笔记.md").write_text("探针内容:只存在于测试 vault", encoding="utf-8")
-    client.post("/api/books", json={"title": "根探针", "file_path": "raw/根探针笔记.md",
+    (tmp_path / "raw" / "books").mkdir(parents=True)
+    (tmp_path / "raw" / "books" / "根探针笔记.md").write_text("探针内容:只存在于测试 vault", encoding="utf-8")
+    client.post("/api/books", json={"title": "根探针", "file_path": "raw/books/根探针笔记.md",
                                     "created": "April 27, 2024 11:32 AM"})
     assert client.get("/api/ai/yearly", params={"year": 2024}).status_code == 200
     assert "探针内容:只存在于测试 vault" in prompts[0]

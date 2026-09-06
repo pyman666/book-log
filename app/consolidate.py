@@ -2,7 +2,7 @@
 
 - 分组键 = (书名去尾部括号限定, 作者串精确匹配)。同名不同作者 = 不同书，不动。
   （父与子〔卜劳恩〕 vs 父与子〔屠格涅夫〕 各自独立）
-- 组内多个文件 → 合并进一个规范文件（优先 raw/书名.md；主文件取内容最多者）；其余删除。
+- 组内多个文件 → 合并进一个规范文件（优先 raw/books/书名.md；主文件取内容最多者）；其余删除。
 - 组内 file_path 为 NULL 的记录（如空壳版本被 douban_ids 删文件后）也挂到规范文件。
 - 豆瓣头由 app.douban_ids 先行剥除，本脚本合并前文件应已是纯笔记。
 - 用法：uv run python -m app.consolidate [--dry-run]
@@ -90,8 +90,9 @@ def run(dry_run=False):
             continue
         if len(files) > 1:
             canon, content, stats = merge_group(files)
-            want = ROOT / "raw" / (title.replace("/", "／") + ".md")
-            # 规范名 raw/书名.md：组内已有就用它；磁盘上没被别的书占用就重命名过去；否则保留主文件原名
+            want = ROOT / "raw" / "books" / (title.replace("/", "／") + ".md")
+            # 规范名 raw/books/书名.md：组内已有就用它；磁盘上没被别的书占用就重命名过去；否则保留主文件原名
+            # （同名不同书撞名时，后到者保留「书名（作者）.md」限定名，与 sync 的二轮关联约定一致）
             if want in files or not want.exists():
                 target = want
                 if target != canon:
@@ -104,9 +105,9 @@ def run(dry_run=False):
         else:
             target = files[0]
             content = None
-            # sold 目录废弃：单文件的组若住在 raw/sold/，把规范文件搬回 raw/
+            # sold 目录废弃：单文件的组若住在 raw/sold/，把规范文件搬回 raw/books/
             if target.parent == ROOT / "raw" / "sold":
-                want = ROOT / "raw" / target.name
+                want = ROOT / "raw" / "books" / target.name
                 if not want.exists():
                     report["moved_out_sold"].append({"from": target.relative_to(ROOT).as_posix(),
                                                      "to": want.relative_to(ROOT).as_posix()})

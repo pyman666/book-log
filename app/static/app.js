@@ -652,7 +652,7 @@ async function bookDetail(id) {
     } catch (err) { toast(err.message, true); }
   };
   $("#d-del").onclick = async () => {
-    if (!confirm("删除该书目记录？（raw/ 正文文件不受影响）")) return;
+    if (!confirm("删除该书目记录？（raw/books/ 正文文件不受影响）")) return;
     await api(`/api/books/${id}`, { method: "DELETE" });
     location.hash = "#/books";
   };
@@ -685,7 +685,7 @@ window.addEventListener("load", () => {
   $("#btn-sync").onclick = async () => {
     try {
       const r = await api("/api/sync", { method: "POST" });
-      toast(`Sync 完成：新增 ${r.created.length}，文件缺失 ${r.missing.length}` +
+      toast(`Sync 完成：挂接 ${r.linked.length}，新增 ${r.created.length}，文件缺失 ${r.missing.length}` +
         (r.created.length ? `（${r.created.join("、")}）` : ""), false, true);
     } catch (e) { toast(e.message, true, true); }
   };

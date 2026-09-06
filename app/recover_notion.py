@@ -1,11 +1,11 @@
-"""一次性恢复：notion-export 里流失的笔记 → raw/。
+"""一次性恢复：notion-export 里流失的笔记 → raw/books/。
 
 背景：当年从 notion-export 整理进 Books/ 时，在库书截掉了部分笔记（17 本）；
 售出/送出的书只留了元数据，65 本书的笔记只存在于 raw/notion-export/。
 
 - 在库：notion 页有、raw 文件没有的笔记行，追加到重叠度最高的 raw 文件，
   以 "## 补：来自 Notion 导出" 分节标记，不动已有内容。
-- 售出：笔记（去导出模板）写入 raw/sold/<书名>.md，db 中对应 sold 记录挂上 file_path。
+- 售出：笔记（去导出模板）写入 raw/books/<书名>.md，db 中对应 sold 记录挂上 file_path。
   同书多批次共享一个笔记文件；导出页之间的重复行按序去重。
 
 用法（仓库根目录）：
@@ -21,8 +21,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 PAGES = ROOT / "raw" / "notion-export" / "Reading" / "Books"
-RAW = ROOT / "raw"
-SOLD = RAW / "sold"
+RAW = ROOT / "raw" / "books"
+SOLD = RAW          # 已废弃的 raw/sold 不再重建：售出笔记与在库版本同住 raw/books/（同一 md）
 DB_PATH = ROOT / "books.db"
 
 FLD = re.compile(r"^\s*(?:📖\s*)?(?:Author|Category|ISBN|Price|Platform|🏢 Publisher|Importance|Progress|Rating|Created|Last)\s*:")
@@ -112,8 +112,8 @@ def run(dry_run=False):
             with target.open("a", encoding="utf-8") as fh:
                 fh.write(block)
 
-    # ③ 售出：写 raw/sold/*.md 并挂 file_path
-    SOLD.mkdir(exist_ok=True)
+    # ③ 售出：写 raw/books/*.md 并挂 file_path
+    SOLD.mkdir(parents=True, exist_ok=True)
     written = {}
     for r in conn.execute("SELECT id, title FROM books WHERE status = 'sold'").fetchall():
         base = base_of(r["title"])
@@ -132,7 +132,7 @@ def run(dry_run=False):
             fname = base.replace("/", "／") + ".md"
             if not dry_run:
                 (SOLD / fname).write_text("\n".join(body) + "\n", encoding="utf-8")
-            written[base] = f"raw/sold/{fname}"
+            written[base] = f"raw/books/{fname}"
         if written[base]:
             report["sold_records_linked"] += 1
             if not dry_run:

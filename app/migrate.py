@@ -1,5 +1,5 @@
 """一次性迁移：Books/*.md(frontmatter) + Books/~售出.md → books.db；
-内容移到 raw/（剥 frontmatter）；旧 Dataview 索引页归档 _trash/。
+内容移到 raw/books/（剥 frontmatter）；旧 Dataview 索引页归档 _trash/。
 
 用法（仓库根目录）：
   .venv/bin/python -m app.migrate --dry-run   # 只报告不写
@@ -16,7 +16,7 @@ from .parsers import parse_book, parse_sold_table, split_frontmatter
 
 ROOT = Path(__file__).resolve().parent.parent
 BOOKS_DIR = ROOT / "Books"
-RAW_DIR = ROOT / "raw"
+RAW_DIR = ROOT / "raw" / "books"
 TRASH = ROOT / "_trash"
 DB_PATH = ROOT / "books.db"
 
@@ -36,7 +36,7 @@ def collect():
         except Exception as e:  # noqa: BLE001
             errors.append(f"{f.name}: {e}")
             continue
-        b["file_path"] = f"raw/{f.name}"
+        b["file_path"] = f"raw/books/{f.name}"
         books.append(b)
     sold = parse_sold_table((BOOKS_DIR / "~售出.md").read_text(encoding="utf-8"))
     return books, sold, errors
@@ -54,7 +54,7 @@ def run(dry_run=False, force=False):
     }
     if dry_run:
         return report
-    RAW_DIR.mkdir(exist_ok=True)
+    RAW_DIR.mkdir(parents=True, exist_ok=True)
     with dbmod.db_conn(DB_PATH) as conn:
         dbmod.init_db(conn)
         n = conn.execute("SELECT COUNT(*) FROM books").fetchone()[0]
