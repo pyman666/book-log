@@ -1,14 +1,17 @@
 """仪表盘聚合查询（只读，纯函数：conn → 可 JSON 序列化结构）。
 
 三块看板数据的单一出处，路由层不做任何加工：
-- daily_counts(conn)    剁手/登记日历（GitHub 热力图）
+- daily_counts(conn)    登记日历（GitHub 热力图，按 created）
+- reading_curve(conn)   读书节奏曲线（按有效阅读时间分桶，只数读过的书 = 有评分）
 - taste_spectrum(conn)  口味光谱（StoryGraph 式三条堆叠 bar）
 - quadrant(conn)        评分 × 重要度象限（气泡=盈亏）
-- cover_wall(conn)      封面墙（只出 id/title/created/rating/isbn 五字段，按 isbn 关联本地封面）
+- cover_wall(conn)      封面墙（只出 id/title/read_at/rating/isbn 五字段，按 isbn 关联本地封面）
 """
 import re
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from .db import read_time
 
 _MONTHS = {m: i for i, m in enumerate(
     "January February March April May June July August September October November December".split(), 1)}
@@ -21,7 +24,7 @@ VERSE = {"诗歌", "散文", "书信"}
 LATIN = re.compile(r"[A-Za-z]{2,}")  # 作者名含连续拉丁字母 → 翻译
 
 
-def _created_date(s):
+def _read_date(s):
     """'April 27, 2024 11:32 AM' → date | None（宽容解析，失败即 None）"""
     if not s:
         return None
@@ -35,15 +38,51 @@ def _created_date(s):
 
 
 def daily_counts(conn):
-    """按登记日聚合：{"2024-04-27": {"n": 2, "titles": [...]}}"""
+    """按登记日（created）聚合：{"2024-04-27": {"n": 2, "titles": [...]}}。
+    不用 read_at：那种「某一天读过」的精度库里根本没有（见 db._migrate_read_at），
+    读过的书也只有一个 Notion 建条目日期，热力图讲的老是「哪天在记账」。"""
     out = defaultdict(lambda: {"n": 0, "titles": []})
     for d, title in conn.execute("SELECT created, title FROM books WHERE created IS NOT NULL"):
-        day = _created_date(d)
+        day = _read_date(d)
         if day:
             e = out[day.isoformat()]
             e["n"] += 1
             e["titles"].append(title)
     return dict(out)
+
+
+_GRAN = ("week", "month", "year")
+
+
+def _period_start(day, gran):
+    """date → 该周期起点 date（week=周一，month=1 号，year=1 月 1 日）。"""
+    if gran == "week":
+        return day - timedelta(days=day.weekday())
+    if gran == "month":
+        return day.replace(day=1)
+    return day.replace(month=1, day=1)
+
+
+def reading_curve(conn, gran="month"):
+    """读书节奏曲线：按有效阅读时间（read_at，空则回落 created）分桶。gran ∈ week/month/year。
+    「读过一本」= 有评分：进过数据库的书 487 本，真读完的远少于这个数，
+    不加这道筛就是购书曲线。没评分但确实读完的，补个评分就会回到曲线里。
+    返回按时间正序的 [{period, n, titles}]，period 是该周期起始日的 ISO 日期
+    （week → 周一，month → 1 号，year → 1 月 1 日）。
+    空周期（该周/月/年没读书）跳过，不做补零——曲线只连有读过的点。"""
+    if gran not in _GRAN:
+        raise ValueError(f"gran 须为 {_GRAN} 之一")
+    buckets = defaultdict(lambda: {"n": 0, "titles": []})
+    for d, title in conn.execute(
+            f"SELECT {read_time('b')} AS rt, title FROM books b WHERE b.rating IS NOT NULL"):
+        day = _read_date(d)
+        if not day:
+            continue
+        e = buckets[_period_start(day, gran)]
+        e["n"] += 1
+        e["titles"].append(title)
+    return [{"period": s.isoformat(), "n": buckets[s]["n"], "titles": buckets[s]["titles"]}
+            for s in sorted(buckets)]
 
 
 def _book_axes(conn):
@@ -105,9 +144,11 @@ def quadrant(conn):
 def cover_wall(conn):
     """封面墙：只返回前端需要的 5 字段（/api/books 全量 payload 对纯展示太肥）。
     以 isbn 为经键（封面 = 本地 raw/covers/<isbn>.* 文件）；是否“有封面”由路由层
-    按磁盘实际文件过滤（analytics 不碰文件系统，保持纯函数）。total = 全库本数。"""
+    按磁盘实际文件过滤（analytics 不碰文件系统，保持纯函数）。total = 全库本数。
+    输出的 read_at 是有效阅读时间（read_at 空则用 created）——纯展示字段，
+    编辑表单读的是 /api/books/{id} 的原值，不会被回写污染。"""
     total = conn.execute("SELECT COUNT(*) FROM books").fetchone()[0]
     rows = conn.execute(
-        "SELECT id, title, created, rating, isbn FROM books "
+        f"SELECT id, title, {read_time()} AS read_at, rating, isbn FROM books "
         "WHERE isbn IS NOT NULL AND isbn != '' ORDER BY id").fetchall()
     return {"total": total, "items": [dict(r) for r in rows]}

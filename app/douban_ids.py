@@ -1,7 +1,7 @@
 """一次性任务：把豆瓣 subject 号提进 books.douban_id，并删掉 md 头部的豆瓣引用块。
 
 - 号源1：raw 文件头 `> **[📖 书名](https://book.douban.com/subject/5406559/)**`（含变体：裸链接行）
-- 号源2（兜底）：raw/notion-export/Reading/Books/ 同名页面里的 subject 链接
+- 号源2（兜底）：raw/notion/ 同名页面里的 subject 链接
 - 剥离规则：首个非空行是以 > 开头且含 book.douban.com/📖 的引用行，则吃掉紧相邻的连续 > 行
   （用户自己的笔记引用前有空行，紧相邻规则不会误吃）。再检查一行裸链接。
 - 剥完无正文 → 删文件、file_path 置 NULL（sync 不会反向重建；前端按 NULL 显示"无正文"）。
@@ -18,9 +18,11 @@ import sqlite3
 from collections import defaultdict
 from pathlib import Path
 
+from .paths import resolve_book_path
+
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "books.db"
-NOTION_BOOKS = ROOT / "raw" / "notion-export" / "Reading" / "Books"
+NOTION_BOOKS = ROOT / "raw" / "notion"
 
 SUBJ = re.compile(r"book\.douban\.com/subject/(\d+)")
 BARE = re.compile(r"^(\[[^\]]*\]\((https?://)?book\.douban\.com/subject/\d+/\)\**|(https?://)?book\.douban\.com/subject/\d+/?\**)$")
@@ -77,7 +79,10 @@ def run(dry_run=False):
     rep = {"stripped": 0, "emptied_deleted": 0, "id_from_file": 0, "id_from_notion": 0}
     seen_files = set()
     for r in conn.execute("SELECT id, title, file_path, douban_id FROM books WHERE file_path IS NOT NULL").fetchall():
-        p = ROOT / r["file_path"]
+        try:
+            p = resolve_book_path(ROOT, r["file_path"])
+        except ValueError:
+            continue
         if not p.is_file() or str(p) in seen_files:
             continue
         seen_files.add(str(p))

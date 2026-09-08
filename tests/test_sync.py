@@ -21,7 +21,7 @@ def test_sync_creates_stubs_and_reports_missing(tmp_path):
     assert "新发现" not in rep2["created"]                      # 幂等，不重复建
     assert c.get("/api/books", params={"q": "新发现"}).json()["total"] == 1
     stub = c.get("/api/books", params={"q": "新发现"}).json()["items"][0]
-    assert stub["file_path"] == "raw/books/新发现.md"
+    assert stub["file_path"] == "新发现.md"
 
 
 def test_sync_links_record_without_file(tmp_path):
@@ -30,8 +30,8 @@ def test_sync_links_record_without_file(tmp_path):
     bid = c.post("/api/books", json={"title": "空链接书"}).json()
     _mk(tmp_path, "空链接书.md")
     rep = c.post("/api/sync").json()
-    assert rep["created"] == [] and rep["linked"] == ["raw/books/空链接书.md"]
-    assert c.get(f"/api/books/{bid}").json()["file_path"] == "raw/books/空链接书.md"
+    assert rep["created"] == [] and rep["linked"] == ["空链接书.md"]
+    assert c.get(f"/api/books/{bid}").json()["file_path"] == "空链接书.md"
     assert c.post("/api/sync").json()["linked"] == []          # 幂等
 
 
@@ -44,9 +44,9 @@ def test_sync_collision_author_disambiguation(tmp_path):
     _mk(tmp_path, "父与子（卜劳恩）.md", "漫画绘本")
     rep = c.post("/api/sync").json()
     assert rep["created"] == []                                # 两文件都挂上，没造污染存根
-    assert rep["linked"] == ["raw/books/父与子.md", "raw/books/父与子（卜劳恩）.md"]
-    assert c.get(f"/api/books/{b1}").json()["file_path"] == "raw/books/父与子.md"
-    assert c.get(f"/api/books/{b2}").json()["file_path"] == "raw/books/父与子（卜劳恩）.md"
+    assert rep["linked"] == ["父与子.md", "父与子（卜劳恩）.md"]
+    assert c.get(f"/api/books/{b1}").json()["file_path"] == "父与子.md"
+    assert c.get(f"/api/books/{b2}").json()["file_path"] == "父与子（卜劳恩）.md"
 
 
 def test_sync_never_steals_linked_file(tmp_path):
@@ -57,5 +57,5 @@ def test_sync_never_steals_linked_file(tmp_path):
     b2 = c.post("/api/books", json={"title": "甲书"}).json()   # 同名不同书（未及消歧命名）
     rep = c.post("/api/sync").json()
     assert rep["linked"] == [] and rep["created"] == []        # 甲书.md 已关联，不重复挂给 b2
-    assert c.get(f"/api/books/{b1}").json()["file_path"] == "raw/books/甲书.md"
+    assert c.get(f"/api/books/{b1}").json()["file_path"] == "甲书.md"
     assert c.get(f"/api/books/{b2}").json()["file_path"] is None

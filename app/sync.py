@@ -3,6 +3,7 @@ import re
 from pathlib import Path
 
 from . import db as dbmod
+from .paths import normalize_file_path, resolve_book_path
 
 _STUB = {"isbn": None, "price": None, "importance": None, "progress": None, "rating": None,
          "created": None, "last_modified": None, "authors": [], "publishers": [],
@@ -42,7 +43,7 @@ def sync_vault(conn, root: Path) -> dict:
     books = Path(root) / "raw" / "books"
     if books.is_dir():
         for f in sorted(books.glob("*.md")):
-            fp = f"raw/books/{f.name}"
+            fp = normalize_file_path(f.name)
             if conn.execute("SELECT 1 FROM books WHERE file_path = ?", (fp,)).fetchone():
                 continue                                    # 该文件已有关联记录
             bid = _match(conn, fp, f.stem)
@@ -57,6 +58,6 @@ def sync_vault(conn, root: Path) -> dict:
     for r in conn.execute(
             "SELECT id, title, file_path FROM books "
             "WHERE status = 'in_library' AND file_path IS NOT NULL"):
-        if not (Path(root) / r["file_path"]).exists():
+        if not resolve_book_path(root, r["file_path"]).is_file():
             report["missing"].append({"id": r["id"], "title": r["title"]})
     return report

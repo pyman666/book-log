@@ -1,0 +1,13 @@
+# 树上的男爵
+
+Author: 卡尔维诺 (../Author/%E5%8D%A1%E5%B0%94%E7%BB%B4%E8%AF%BA%20bc7e2f2f32ea4d8d9b8f0c9f48088929.md)
+Category: 长篇 (../Category/%E9%95%BF%E7%AF%87%206b4e322679ec4c5e98aaa5526375f168.md)
+ISBN: 9787544722803
+Price: 14.84
+ Platform: 抖音 (../Platform/%E6%8A%96%E9%9F%B3%20bda2aad8d7a64269931fcf174a026721.md)
+🏢 Publisher: 译林出版社 (../Publisher/%E8%AF%91%E6%9E%97%E5%87%BA%E7%89%88%E7%A4%BE%209928c83dbb0947949034efce236fe3b8.md)
+Importance: 1
+Created: November 13, 2023 9:54 AM
+Last: July 27, 2024 11:37 AM
+
+[树上的男爵](https://book.douban.com/subject/6789605/)

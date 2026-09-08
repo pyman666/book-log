@@ -1,3 +1,4 @@
+from app import db as dbmod
 from app.db import (get_db, get_book, init_db, list_books, save_book, stats_group,
                     stats_summary, update_book)
 
@@ -10,10 +11,68 @@ def make(tmp_path):
 
 def B(title="测试", **kw):
     b = {"title": title, "isbn": None, "price": None, "importance": None, "progress": None,
-         "rating": None, "status": "in_library", "created": None, "last_modified": None,
+         "rating": None, "status": "in_library", "created": None, "read_at": None,
+         "last_modified": None,
          "file_path": None, "authors": [], "publishers": [], "categories": [], "platform": None}
     b.update(kw)
     return b
+
+
+def test_file_path_stores_book_filename_only(tmp_path):
+    conn = make(tmp_path)
+    bid = save_book(conn, B(title="路径书", file_path="raw/books/路径书.md"))
+    assert get_book(conn, bid)["file_path"] == "路径书.md"
+
+
+def test_read_at_has_no_default(tmp_path):
+    """写入侧不设默认：回填 created 会把「只买没读」伪造成读过。"""
+    conn = make(tmp_path)
+    bid = save_book(conn, B(created="April 1, 2024 10:00 AM", rating=8))
+    assert get_book(conn, bid)["read_at"] is None
+
+
+def test_polluted_read_at_keeps_only_rated(tmp_path):
+    """存量库治理：早期回填的 read_at 里，只有打过分的书保留 created，其余清回 NULL；
+    user_version 保证只跑一次，事后显式填一个和 created 相同的值不会被抹掉。"""
+    conn = make(tmp_path)
+    save_book(conn, B(title="没读", created="April 1, 2024 10:00 AM"))
+    save_book(conn, B(title="读过", created="April 1, 2024 10:00 AM", rating=8))
+    save_book(conn, B(title="售出", rating=None))
+    conn.execute("UPDATE books SET read_at = created WHERE created IS NOT NULL")  # 复现老迁移
+    conn.execute("INSERT INTO ai_cache (key, text) VALUES ('yearly:2024', '旧画像')")
+    conn.execute("INSERT INTO ai_cache (key, text) VALUES ('活着.md', '单本摘要')")
+    conn.execute("PRAGMA user_version = 1")                     # 回到治理前的库
+    conn.commit()
+    dbmod.init_db(conn)
+    assert dict(conn.execute("SELECT title, read_at FROM books").fetchall()) == {
+        "没读": None, "读过": "April 1, 2024 10:00 AM", "售出": None}
+    # 年度画像旧文本随口径变更作废，单本摘要不受影响
+    assert [r[0] for r in conn.execute(
+        "SELECT key FROM ai_cache ORDER BY key")] == ["活着.md"]
+    conn.execute("UPDATE books SET read_at = created WHERE title = '没读'")
+    conn.commit()
+    dbmod.init_db(conn)                                         # 再启动一次，不二次抹值
+    assert conn.execute("SELECT read_at FROM books WHERE title='没读'").fetchone()[0] \
+        == "April 1, 2024 10:00 AM"
+
+
+def test_read_at_can_differ_from_created(tmp_path):
+    conn = make(tmp_path)
+    bid = save_book(conn, B(created="April 1, 2023 10:00 AM", read_at="May 2, 2024"))
+    book = get_book(conn, bid)
+    assert book["created"] == "April 1, 2023 10:00 AM"
+    assert book["read_at"] == "May 2, 2024"
+
+
+def test_year_filters_use_read_time_with_created_fallback(tmp_path):
+    """年度维度看「有效阅读时间」：read_at 有值算它，没值回落 created。"""
+    conn = make(tmp_path)
+    save_book(conn, B(title="按阅读年", created="April 1, 2023", read_at="May 2, 2024"))
+    save_book(conn, B(title="只有登记日", created="April 1, 2024"))
+    save_book(conn, B(title="另一年", created="April 1, 2022", read_at="May 2, 2023"))
+    assert [i["title"] for i in list_books(conn, year=2024)["items"]] == ["按阅读年", "只有登记日"]
+    assert dbmod.facets(conn)["years"] == [2024, 2023]
+    assert {row["key"] for row in stats_group(conn, "year")} == {2024, 2023}
 
 
 def test_save_and_get(tmp_path):

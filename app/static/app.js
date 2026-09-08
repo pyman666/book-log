@@ -70,11 +70,16 @@ async function dashboard() {
         <div id="spectrum-flags"></div><div class="chart" id="ch-spectrum"></div></section>
       <section class="panel span5"><h2><span class="no">肆</span><span class="t">评分 × 重要度</span><span class="hint">气泡=盈亏，红=亏 绿=赚</span></h2>
         <div class="chart" id="ch-quadrant"></div></section>
-      <section class="panel wide"><h2><span class="no">伍</span><span class="t">分布</span><span class="hint" id="dist-hint">本数 · Top 12</span>
+      <section class="panel wide"><h2><span class="no">伍</span><span class="t">读书节奏</span><span class="hint">只数打过分的书 · 每期读完几本</span>
+        <select id="curve-gran" class="inline right" title="时间粒度">
+          <option value="week">按周</option><option value="month" selected>按月</option><option value="year">按年</option>
+        </select></h2>
+        <div class="chart" id="ch-curve"></div></section>
+      <section class="panel wide"><h2><span class="no">陆</span><span class="t">分布</span><span class="hint" id="dist-hint">本数 · Top 12</span>
         <select id="dist-by" class="inline right" title="统计维度"></select>
         <select id="dist-agg" class="inline right" title="统计方式"></select></h2>
         <div class="chart" id="ch-dist"></div></section>
-      <section class="panel wide letter"><h2><span class="no">陆</span><span class="t">AI 年度画像</span>
+      <section class="panel wide letter"><h2><span class="no">柒</span><span class="t">AI 年度画像</span>
         <select id="ai-year" class="inline right"></select>
         <button id="ai-gen" class="ghost right">生成</button><button id="ai-refresh" class="ghost right" title="重新生成">↻</button></h2>
         <div class="orn" aria-hidden="true">❦</div>
@@ -89,7 +94,7 @@ async function dashboard() {
     lg("其中亏损", fmt(s.loss)) + lg("其中净赚", fmt(s.gain)) + lg("有价书数", s.priced);
 
   // 新面板：失败不互相阻塞（如 LLM 配额、封面未抓完）
-  [panelHeatmap, panelSpectrum, panelQuadrant, panelShelf, panelDistribution, panelYearlyAI]
+  [panelHeatmap, panelCurve, panelSpectrum, panelQuadrant, panelShelf, panelDistribution, panelYearlyAI]
     .forEach(f => f().catch(e => console.warn(f.name, e)));
 }
 
@@ -110,6 +115,7 @@ async function panelHeatmap() {
     c.setOption({
       tooltip: { formatter: p => `${p.value[0]} · ${p.value[1]} 本<br>${p.value[2].join("、")}` },
       visualMap: { min: 1, max: Math.max(3, ...pts.map(p => p[1])), show: false,
+        dimension: 1,  // 数据是 [date, n, titles]，显式指向 n——否则拿 titles 排序，全落色带外→格不填色
         inRange: { color: ["--heat-1", "--heat-2", "--heat-3", "--heat-4"].map(cssVar) } },
       calendar: { range: +y, cellSize: [13, 13], left: "center", top: 30,
         itemStyle: { borderColor: cssVar("--page"), borderWidth: 2 },
@@ -131,6 +137,49 @@ async function panelHeatmap() {
   draw(defaultYear);
 }
 const hstat = (k, v) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
+
+// ---------- 读书节奏曲线（只数有评分的书，按 read_at、空则回落 created 分周/月/年） ----------
+async function panelCurve() {
+  const sel = $("#curve-gran");
+  const c = bareChart($("#ch-curve"));   // 时间轴折线，不用直角默认配置
+  const label = (p, g) =>
+    g === "year" ? p.slice(0, 4) : g === "month" ? `${+p.slice(0, 4)}年${+p.slice(5, 7)}月` : `${+p.slice(5, 7)}-${+p.slice(8, 10)}`;
+  const draw = async () => {
+    const g = sel.value;
+    const rows = await api(`/api/stats/curve?gran=${g}`);
+    const pts = rows.map(r => [new Date(r.period).getTime(), r.n, r]);
+    // 每期均值：给节奏一个参照线（week→周均，month→月均，year→年均）
+    const avg = rows.length ? rows.reduce((s, r) => s + r.n, 0) / rows.length : 0;
+    const area = cssVar("--series-2");
+    c.setOption({
+      backgroundColor: "transparent",
+      textStyle: { color: cssVar("--text-secondary"),
+        fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif" },
+      grid: { left: 8, right: 24, top: 20, bottom: 8, containLabel: true },
+      tooltip: { trigger: "axis",
+        formatter: ps => { const r = ps[0].data[2];
+          return `${label(r.period, g)} · ${r.n} 本<br>${r.titles.join("、")}`; } },
+      xAxis: { type: "time", axisLine: { lineStyle: { color: cssVar("--axis") } },
+        axisLabel: { color: cssVar("--muted"), hideOverlap: true }, splitLine: { show: false } },
+      yAxis: { type: "value", minInterval: 1, axisLine: { show: false },
+        axisLabel: { color: cssVar("--muted") }, splitLine: { lineStyle: { color: cssVar("--grid") } } },
+      series: [{
+        type: "line", data: pts, smooth: true, symbol: "circle", symbolSize: 6,
+        lineStyle: { color: area, width: 2 }, itemStyle: { color: area },
+        areaStyle: { color: {
+          type: "linear", x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [{ offset: 0, color: area + "55" }, { offset: 1, color: area + "00" }] } },
+        markLine: avg ? { silent: true, symbol: "none",
+          lineStyle: { type: "dashed", color: cssVar("--axis") },
+          label: { formatter: `每期均 ${avg.toFixed(1)} 本`, color: cssVar("--muted"), fontSize: 10, position: "insideEndTop" },
+          data: [{ yAxis: avg }] } : undefined,
+      }],
+      animationDuration: 300, animationDurationUpdate: 250 },
+    );
+  };
+  sel.onchange = draw;
+  await draw();
+}
 
 // 口味光谱 8-slot 分类色：style.css 的 --cat-*（固定顺序，validate_palette.js 双模式过检）
 const CAT = ["--cat-1", "--cat-2", "--cat-3", "--cat-4", "--cat-5", "--cat-6", "--cat-7", "--cat-8"];
@@ -309,9 +358,9 @@ async function panelShelf() {
   if (!coversLoaded) await ensureCovers();   // coverSrc 依赖集合；首次拉一次
   const data = await api("/api/stats/wall");
   cfAll = data.items.slice().sort(
-    (a, b) => (a.created || "").localeCompare(b.created || "") || a.id - b.id);
+    (a, b) => (a.read_at || "").localeCompare(b.read_at || "") || a.id - b.id);
   $("#shelf-stat").textContent = `已抓封面 ${cfAll.length}/${data.total}`;
-  const years = [...new Set(cfAll.map(b => yearOf(b.created)))].filter(y => y !== "—").sort().reverse();
+  const years = [...new Set(cfAll.map(b => yearOf(b.read_at)))].filter(y => y !== "—").sort().reverse();
   const sel = $("#shelf-year");
   sel.innerHTML = `<option value="">全部</option>` + years.map(y => `<option>${y}</option>`).join("");
   sel.onchange = () => setShelfList(sel.value);
@@ -327,7 +376,7 @@ function cfRandomStart() {
 }
 
 function setShelfList(year) {
-  cfList = year ? cfAll.filter(b => yearOf(b.created) === year) : cfAll.slice();
+  cfList = year ? cfAll.filter(b => yearOf(b.read_at) === year) : cfAll.slice();
   cfCenter = cfRandomStart();
   $("#cf-stage").querySelectorAll(".cf-item").forEach(el => el.remove());
   cfNodes.clear();
@@ -389,7 +438,7 @@ function cfRender() {
   title.textContent = b.title;
   title.onclick = () => location.hash = `#/book/${b.id}`;
   const parts = [];
-  const y = yearOf(b.created);
+  const y = yearOf(b.read_at);
   if (y !== "—") parts.push(y);
   if (b.rating) parts.push(`<span class="wr">★${(b.rating / 2).toFixed(1)}</span>`);
   $("#cf-meta").innerHTML = parts.join(" · ");
@@ -425,93 +474,332 @@ async function panelYearlyAI() {
 // ---------- 书单 ----------
 const filters = { q: "", category: "", author: "", publisher: "", platform: "",
                   nationality: "", year: "",
-                  status: "in_library", sort: "id", desc: "true", page: 1 };
+                  status: "in_library", sort: "created", desc: "true", page: 1 };
+
+const MONS = "January February March April May June July August September October November December".split(" ");
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+// Notion 串（December 3, 2023 6:15 PM）↔ <input type=date> 的 YYYY-MM-DD
+const dateOf = s => {
+  if (!s) return "";
+  const iso = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (iso) return iso[0];
+  const m = String(s).match(/([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})/);
+  const mo = m ? MONS.findIndex(x => x.toLowerCase() === m[1].toLowerCase()) + 1 : 0;
+  return mo ? `${m[3]}-${String(mo).padStart(2, "0")}-${String(m[2]).padStart(2, "0")}` : "";
+};
+const toNotion = iso => {
+  const [y, mo, d] = iso.split("-").map(Number);
+  return `${MONS[mo - 1]} ${d}, ${y}`;
+};
+const isoDate = s => /^\d{4}-\d{1,2}-\d{1,2}$/.test(s) && !isNaN(Date.parse(s));
 
 async function booksView() {
   charts.forEach(c => c.dispose()); charts = [];
-  const f = await api("/api/facets");
+  const f = FACETS = await api("/api/facets");
   const sel = (key, items, allLabel) => `
     <select data-f="${key}"><option value="">${allLabel}</option>
     ${items.map(v => `<option ${String(filters[key]) === String(v) ? "selected" : ""}>${v}</option>`).join("")}</select>`;
   view.innerHTML = `
     <div class="toolbar">
       <input id="f-q" placeholder="书名 / ISBN" value="${filters.q}">
-      ${sel("category", f.categories, "全部分类")}
       ${sel("author", f.authors, "全部作者")}
-      ${sel("publisher", f.publishers, "全部出版社")}
+      ${sel("category", f.categories, "全部分类")}
       ${sel("nationality", f.nationalities, "全部国籍")}
+      ${sel("publisher", f.publishers, "全部出版社")}
       ${sel("platform", f.platforms, "全部平台")}
       ${sel("year", f.years, "全部年份")}
       <select data-f="status"><option value="">全部状态</option>
         <option value="in_library" ${filters.status === "in_library" ? "selected" : ""}>在库</option>
         <option value="sold" ${filters.status === "sold" ? "selected" : ""}>已售</option></select>
-      <select data-f="sort">
-        ${["id:录入", "title:书名", "price:价格", "rating:评分", "progress:进度",
-          "created:创建", "last_modified:更新"].map(s => {
-          const [v, l] = s.split(":");
-          return `<option value="${v}" ${filters.sort === v ? "selected" : ""}>${l}</option>`;
-        }).join("")}
-      </select>
-      <label style="font-size:12px;color:var(--muted)"><input type="checkbox" id="f-desc"
-        ${filters.desc === "true" ? "checked" : ""}> 降序</label>
-      <button id="f-apply" class="primary">筛选</button>
-      <button id="f-new">+ 新书</button>
+      <button id="f-apply" class="primary right">筛选</button>
+      <button id="f-new" class="btn-circle" title="登记新书" aria-label="登记新书">＋</button>
     </div>
-    <table id="tbl"><thead><tr>
-      <th>书名</th><th>作者</th><th>国籍</th><th>分类</th><th>出版社</th><th>平台</th>
-      <th>价格</th><th>进度</th><th>评分</th><th>状态</th><th>创建</th>
-    </tr></thead><tbody></tbody></table>
+    <div class="tbl-wrap"><table id="tbl"><colgroup>
+      <col style="width:17%"><col style="width:11%"><col style="width:7%"><col style="width:8%">
+      <col style="width:11%"><col style="width:7%"><col style="width:7%"><col style="width:7%">
+      <col style="width:7%"><col style="width:8%"><col style="width:10%">
+    </colgroup><thead><tr>
+      <th class="s" data-sort="title">书名</th><th>作者</th><th>国籍</th><th>分类</th><th>出版社</th>
+      <th>平台</th>
+      <th class="s" data-sort="price">价格</th><th class="s" data-sort="progress">进度</th>
+      <th class="s" data-sort="rating">评分</th><th>状态</th>
+      <th class="s" data-sort="read_at">阅读</th>
+    </tr></thead><tbody></tbody></table></div>
     <div class="pager"><button id="pg-prev">上一页</button><span id="pg-info"></span>
       <button id="pg-next">下一页</button></div>
     <div id="book-form" class="panel hidden"></div>`;
-  $("#f-apply").onclick = () => {
+  const apply = () => {
     filters.q = $("#f-q").value.trim();
-    filters.desc = $("#f-desc").checked ? "true" : "false";
     view.querySelectorAll("[data-f]").forEach(el => (filters[el.dataset.f] = el.value));
     filters.page = 1;
     loadBooks();
   };
+  $("#f-apply").onclick = apply;
+  $("#f-q").addEventListener("keydown", e => { if (e.key === "Enter") apply(); });
+  view.querySelectorAll("[data-f]").forEach(s => s.addEventListener("change", apply));
   $("#f-new").onclick = showBookForm;
+  $("#tbl thead").addEventListener("click", e => {
+    const th = e.target.closest("th.s");
+    if (th) sortBy(th.dataset.sort);
+  });
+  const tb = $("#tbl tbody");
+  tb.addEventListener("click", e => {
+    if (e.target.closest("a")) return;                       // 🌐 豆瓣链接自己走
+    const fill = e.target.closest(".fill");
+    if (fill) return openDimEditor(fill);
+    const dt = e.target.closest("input.dt");
+    if (dt) { openDtPicker(dt); return; }                    // 点输入框任意处弹原生日期选择器
+    const title = e.target.closest("td.title");
+    if (title) location.hash = `#/book/${title.closest("tr").dataset.id}`;
+  });
+  // 共享的原生日期选择器（藏屏外）：showPicker 弹出，显示格式由单元格的文本控制（yyyy-mm-dd）
+  const dtPicker = document.createElement("input");
+  dtPicker.type = "date";
+  dtPicker.className = "dt-hidden";
+  dtPicker.addEventListener("change", () => {
+    const cell = dtPicker._cell;
+    if (!cell) return;
+    cell.value = dtPicker.value;
+    inlineEdit(cell);
+  });
+  view.appendChild(dtPicker);
+  tb.addEventListener("change", e => { if (e.target.dataset.field) inlineEdit(e.target); });
   $("#pg-prev").onclick = () => { if (filters.page > 1) { filters.page--; loadBooks(); } };
   $("#pg-next").onclick = () => { filters.page++; loadBooks(); };
   await loadBooks();
+}
+
+// 点列名排序：同列翻转方向；换列给一个顺手的默认方向（时间/数字降序在前，文字升序在前）
+const SORT_DESC_FIRST = new Set(["price", "progress", "rating", "read_at", "created"]);
+function sortBy(col) {
+  if (filters.sort === col) filters.desc = filters.desc === "true" ? "false" : "true";
+  else { filters.sort = col; filters.desc = SORT_DESC_FIRST.has(col) ? "true" : "false"; }
+  filters.page = 1;
+  loadBooks();
+}
+function renderSortMarks() {
+  document.querySelectorAll("#tbl th.s").forEach(th => {
+    const on = th.dataset.sort === filters.sort;
+    th.classList.toggle("on", on);
+    th.setAttribute("aria-sort", on ? (filters.desc === "true" ? "descending" : "ascending") : "none");
+    const old = th.querySelector(".arr");
+    if (old) old.remove();
+    if (on) th.insertAdjacentHTML("beforeend", `<span class="arr">${filters.desc === "true" ? "↓" : "↑"}</span>`);
+  });
+}
+
+let FACETS = null;                     // 维度全量值：弹层候选池
+const rowItems = new Map();            // id → 行数据；就地提交后回写 + 局部重绘该行
+
+const dimBtn = (b, dim, val) =>
+  `<td><button class="fill" data-id="${b.id}" data-dim="${dim}" title="点击编辑">${
+    val ? esc(val) : '<span class="dull">＋ 添加</span>'}</button></td>`;
+
+function bookRow(b) {
+  return `
+    <tr data-id="${b.id}">
+      <td class="title">${esc(b.title)}${b.douban_id ? ` <a class="dbk" title="豆瓣" href="https://book.douban.com/subject/${b.douban_id}/" target="_blank" rel="noopener">🌐</a>` : ""}${b.status === "in_library" && !b.file_path ? '<span class="warn"> 无正文</span>' : ""}</td>
+      ${dimBtn(b, "authors", (b.authors || []).join("、"))}
+      <td><button class="fill" data-id="${b.id}" data-dim="nationality"
+        title="按作者设置国籍（作者跨书共享，改动全局生效）">${
+        (b.nationalities || []).join("、") ? esc(b.nationalities.join("、")) : '<span class="dull">＋ 添加</span>'}</button></td>
+      ${dimBtn(b, "categories", (b.categories || []).join("、"))}
+      ${dimBtn(b, "publishers", (b.publishers || []).join("、"))}
+      ${dimBtn(b, "platform", b.platform)}
+      <td><input class="inline" data-field="price" value="${b.price ?? ""}" placeholder="—" aria-label="价格"></td>
+      <td><input class="inline" data-field="progress" value="${b.progress ?? ""}" placeholder="—" aria-label="进度"></td>
+      <td><input class="inline" data-field="rating" value="${b.rating ?? ""}" placeholder="—" aria-label="评分"></td>
+      <td><select class="inline" data-field="status" aria-label="状态">
+        <option value="in_library" ${b.status === "in_library" ? "selected" : ""}>在库</option>
+        <option value="sold" ${b.status === "sold" ? "selected" : ""}>已售</option></select></td>
+      <td><input type="text" class="inline dt${dateOf(b.read_at) ? " has" : ""}" data-field="read_at"
+        value="${dateOf(b.read_at)}" aria-label="读完日期（yyyy-mm-dd，点击可选）" spellcheck="false"></td>
+    </tr>`;
 }
 
 async function loadBooks() {
   const p = new URLSearchParams();
   Object.entries(filters).forEach(([k, v]) => { if (v !== "" && v != null) p.set(k, v); });
   const data = await api(`/api/books?${p}`);
-  $("#tbl tbody").innerHTML = data.items.map(b => `
-    <tr data-id="${b.id}">
-      <td class="title" onclick="location.hash='#/book/${b.id}'">${b.title}${b.douban_id ? ` <a class="dbk" title="豆瓣" href="https://book.douban.com/subject/${b.douban_id}/" target="_blank" onclick="event.stopPropagation()">🌐</a>` : ""}${b.status === "in_library" && !b.file_path ? '<span class="warn"> 无正文</span>' : ""}</td>
-      <td>${(b.authors || []).join("、") || "—"}</td>
-      <td>${(b.nationalities || []).join("、") || "—"}</td>
-      <td>${(b.categories || []).join("、") || "—"}</td>
-      <td>${(b.publishers || []).join("、") || "—"}</td>
-      <td>${b.platform || "—"}</td>
-      <td><input class="inline" data-field="price" value="${b.price ?? ""}" placeholder="—"></td>
-      <td><input class="inline" data-field="progress" value="${b.progress ?? ""}" placeholder="—" style="width:52px"></td>
-      <td><input class="inline" data-field="rating" value="${b.rating ?? ""}" placeholder="—" style="width:52px"></td>
-      <td><select class="inline" data-field="status">
-        <option value="in_library" ${b.status === "in_library" ? "selected" : ""}>在库</option>
-        <option value="sold" ${b.status === "sold" ? "selected" : ""}>已售</option></select></td>
-      <td>${yearOf(b.created)}</td>
-    </tr>`).join("");
+  rowItems.clear();
+  data.items.forEach(b => rowItems.set(b.id, b));
+  $("#tbl tbody").innerHTML = data.items.map(bookRow).join("") ||
+    `<tr><td colspan="11" class="dull" style="text-align:center;padding:28px">没有符合这些条件的书——换个筛选，或点右上「＋」登记新书。</td></tr>`;
   const pages = Math.max(1, Math.ceil(data.total / data.page_size));
   $("#pg-info").textContent = `共 ${data.total} 本 · 第 ${data.page}/${pages} 页`;
   $("#pg-prev").disabled = data.page <= 1;
   $("#pg-next").disabled = data.page >= pages;
-  $("#tbl tbody").querySelectorAll("input.inline").forEach(i => (i.onchange = () => inlineEdit(i)));
-  $("#tbl tbody").querySelectorAll("select[data-field=status]").forEach(s => (s.onchange = () => inlineEdit(s)));
+  renderSortMarks();
 }
 
+function paintRow(b) {
+  const tr = $(`#tbl tr[data-id="${b.id}"]`);
+  if (tr) tr.outerHTML = bookRow(b);   // 事件走 tbody 委托，重绘不掉监听
+}
+
+function openDtPicker(cell) {
+  const picker = document.querySelector(".dt-hidden");
+  if (!picker) return;
+  const s = cell.value.trim().replace(/[\/\s.]/g, "-");
+  picker._cell = cell;
+  picker.value = isoDate(s) ? s : "";
+  // 原生弹层锚定在输入框位置——先把隐框挪到目标格子上（透明占位），弹层才不会飞出屏外
+  const r = cell.getBoundingClientRect();
+  Object.assign(picker.style, { left: r.left + "px", top: r.top + "px",
+    width: r.width + "px", height: r.height + "px" });
+  picker.addEventListener("blur", function reset() {
+    Object.assign(picker.style, { left: "-9999px", top: "0", width: "1px", height: "" });
+    picker.removeEventListener("blur", reset);
+  });
+  requestAnimationFrame(() => { try { picker.showPicker(); } catch { /* 不支持就手动键入 */ } });
+}
 async function inlineEdit(el) {
   const id = el.closest("tr").dataset.id;
   const field = el.dataset.field;
-  const v = field === "status" ? el.value : numOrNull(el.value);
+  let v;
+  if (field === "status") v = el.value;
+  else if (field === "read_at") {
+    const s = el.value.trim().replace(/[\/\s.]/g, "-");      // 宽容：2024/03/05 也收，统一成 yyyy-mm-dd
+    if (!s) v = null;                                        // 清空 = 没读
+    else if (!isoDate(s)) { toast("日期按 yyyy-mm-dd 写，如 2024-03-05", true); return; }
+    else { el.value = s; v = toNotion(s); }                  // 存库仍为 Notion 串
+  }
+  else v = numOrNull(el.value);
   try {
-    await api(`/api/books/${id}`, { method: "PUT", body: JSON.stringify({ [field]: v }) });
+    const fresh = await api(`/api/books/${id}`, { method: "PUT", body: JSON.stringify({ [field]: v }) });
+    const b = rowItems.get(+id);
+    if (b) {
+      Object.assign(b, { [field]: v }, { nationalities: fresh.nationalities });
+      if (field === "read_at") paintRow(b);   // 日期有无值切换日历图标（.has 类）
+    }
     toast("已保存");
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------- 行内维度弹层：作者/分类/出版社多选（可新建），平台单选 ----------
+let pop = null, popClosed = { at: 0, anchor: null };
+function closePop() {
+  if (!pop) return;
+  const { el, anchor, outside, onScroll } = pop;
+  document.removeEventListener("mousedown", outside, true);
+  removeEventListener("scroll", onScroll, true);
+  el.remove();
+  popClosed = { at: Date.now(), anchor };
+  pop = null;
+}
+function positionPop(el, anchor) {
+  const r = anchor.getBoundingClientRect();
+  el.style.left = "0px"; el.style.top = "0px";
+  const w = Math.max(240, Math.min(r.width + 60, 380));
+  el.style.width = w + "px";
+  const h = el.offsetHeight;
+  const x = Math.max(8, Math.min(r.left, innerWidth - w - 8));
+  const y = r.bottom + 6 + h > innerHeight - 8 ? Math.max(8, r.top - h - 6) : r.bottom + 6;
+  el.style.left = x + "px"; el.style.top = y + "px";
+}
+function openDimEditor(btn) {
+  if (popClosed.anchor === btn && Date.now() - popClosed.at < 300) return;  // 外点关闭后紧跟的 click 不重开
+  closePop();
+  const b = rowItems.get(+btn.dataset.id);
+  if (!b) return;
+  const el = document.createElement("div");
+  el.className = "pop";
+  document.body.appendChild(el);
+  if (btn.dataset.dim === "nationality") renderNationality(el, b);
+  else if (btn.dataset.dim === "platform") renderSingle(el, b, "platform");
+  else renderMulti(el, b, btn.dataset.dim);
+  pop = {
+    el, anchor: btn,
+    outside: ev => { if (!el.contains(ev.target)) closePop(); },
+    onScroll: closePop,
+  };
+  positionPop(el, btn);
+  addEventListener("scroll", pop.onScroll, true);
+  setTimeout(() => document.addEventListener("mousedown", pop.outside, true));
+  el.addEventListener("keydown", e => { if (e.key === "Escape") closePop(); });
+  const q = el.querySelector(".pop-q");
+  if (q) q.focus();
+}
+function renderMulti(el, b, dim) {
+  const cur = new Set(b[dim] || []);
+  el.innerHTML = `<input class="pop-q" placeholder="模糊匹配 · Enter 添加新值" autocomplete="off"><div class="pop-list"></div>`;
+  const q = el.querySelector(".pop-q"), list = el.querySelector(".pop-list");
+  const draw = () => {
+    const s = q.value.trim().toLowerCase();
+    const pool = FACETS[dim] || [];
+    const item = (n, on) => `<label class="pop-item"><input type="checkbox" ${on ? "checked" : ""}><span>${esc(n)}</span></label>`;
+    const sel = [...cur].filter(n => !s || n.toLowerCase().includes(s));           // 已选置顶
+    const rest = pool.filter(n => !cur.has(n) && (!s || n.toLowerCase().includes(s)));
+    list.innerHTML = sel.map(n => item(n, true)).join("") + rest.map(n => item(n, false)).join("")
+      || `<div class="pop-empty">无匹配 · 按 Enter 新建「${esc(q.value.trim())}」</div>`;
+    list.querySelectorAll(".pop-item input").forEach(cb => cb.onchange = () => {
+      const n = cb.parentElement.querySelector("span").textContent;
+      cb.checked ? cur.add(n) : cur.delete(n);
+      commitDim(b, dim, [...cur]);   // 每勾一下即落账；弹层保持打开可连续勾
+      draw();
+    });
+  };
+  q.oninput = draw;
+  q.onkeydown = e => {
+    if (e.key !== "Enter") return;
+    const n = q.value.trim();
+    if (!n) return;
+    cur.add(n);
+    commitDim(b, dim, [...cur]);
+    q.value = "";
+    draw();
+  };
+  draw();
+}
+// 国籍弹层：按作者逐个设国籍（作者行跨书共享，改一处全局生效；单作者书 = 一行下拉）
+function renderNationality(el, b) {
+  const aus = b.authors || [];
+  if (!aus.length) {
+    el.innerHTML = '<div class="pop-empty">这本书没作者——国籍跟着作者走，先去作者列补人。</div>';
+    return;
+  }
+  const nats = FACETS.nationalities || [];
+  const cur = n => (b.author_nationalities || {})[n] || "";
+  el.innerHTML = aus.map(n => {
+    const v = cur(n);
+    const list = [""];
+    nats.forEach(x => { if (x !== v) list.push(x); });
+    if (v && !list.includes(v)) list.push(v);
+    const opts = list.map(o => `<option value="${esc(o)}" ${o === v ? "selected" : ""}>${esc(o) || "未知"}</option>`).join("");
+    return `<label class="pop-row"><span class="pop-name" title="${esc(n)}">${esc(n)}</span>` +
+      `<select data-a="${esc(n)}">${opts}</select></label>`;
+  }).join("");
+  el.querySelectorAll("select").forEach(s => s.onchange = () => {
+    const map = Object.fromEntries(aus.map(n => [n, cur(n)]));
+    map[s.dataset.a] = s.value;
+    commitNat(b, map);
+  });
+}
+async function commitNat(b, map) {
+  try {
+    const fresh = await api(`/api/books/${b.id}/author-nationalities`,
+      { method: "PUT", body: JSON.stringify({ nationalities: map }) });
+    Object.assign(b, fresh);
+    paintRow(b);
+  } catch (e) { toast(e.message, true); }
+}
+function renderSingle(el, b, dim) {
+  const poolKey = dim === "platform" ? "platforms" : dim;  // 字段单数，FACETS 键是复数
+  const cur = b[dim];
+  const opts = ["— 清空", ...(FACETS[poolKey] || []).filter(p => p !== cur)];
+  el.innerHTML = `<div class="pop-list">${opts.map(o =>
+    `<div class="pop-item${o === cur ? " on" : ""}"><span>${esc(o)}</span></div>`).join("")}</div>`;
+  el.querySelectorAll(".pop-item").forEach(it => it.onclick = () => {
+    const t = it.querySelector("span").textContent;
+    commitDim(b, dim, t === "— 清空" ? null : t);
+    closePop();
+  });
+}
+async function commitDim(b, dim, value) {
+  try {
+    const fresh = await api(`/api/books/${b.id}`, { method: "PUT", body: JSON.stringify({ [dim]: value }) });
+    Object.assign(b, { [dim]: value }, { nationalities: fresh.nationalities });  // 作者变了国籍跟着动
+    paintRow(b);
   } catch (e) { toast(e.message, true); }
 }
 
@@ -529,7 +817,8 @@ const BOOK_FIELDS = `
   <label>重要度（0-1）<input name="importance" type="number" step="0.1" min="0" max="1"></label>
   <label>状态<select name="status">
     <option value="in_library">在库</option><option value="sold">已售</option></select></label>
-  <label>创建时间（如 April 27, 2024 11:32 AM，可空）<input name="created"></label>`;
+  <label>创建时间（如 April 27, 2024 11:32 AM，可空）<input name="created"></label>
+  <label>阅读时间（可空；留空则聚合时按创建时间归年）<input name="read_at"></label>`;
 
 async function fillDimSelects(form) {
   const f = await api("/api/facets");
@@ -545,7 +834,7 @@ function formPayload(form) {
     categories: splitList(g("categories")), platform: g("platform") || null, isbn: g("isbn") || null,
     price: numOrNull(g("price")), progress: numOrNull(g("progress")), rating: numOrNull(g("rating")),
     importance: numOrNull(g("importance")), status: g("status") || "in_library",
-    created: g("created") || null,
+    created: g("created") || null, read_at: g("read_at") || null,
   };
 }
 
@@ -582,7 +871,7 @@ async function bookDetail(id) {
     if (r.ok) content = await r.text();
   } catch (e) { /* 无正文 */ }
   const obs = b.file_path
-    ? `<a class="obs" href="obsidian://open?vault=Books&file=${encodeURIComponent(b.file_path)}">📖 在 Obsidian 打开</a>`
+    ? `<a class="obs" href="obsidian://open?vault=Books&file=${encodeURIComponent("raw/books/" + b.file_path)}">📖 在 Obsidian 打开</a>`
     : "";
   const dbk = b.douban_id
     ? `<a class="obs" href="https://book.douban.com/subject/${b.douban_id}/" target="_blank" rel="noopener">🌐 豆瓣</a>`
@@ -651,6 +940,7 @@ async function bookDetail(id) {
   el("importance").value = b.importance ?? "";
   el("status").value = b.status;
   el("created").value = b.created || "";
+  el("read_at").value = b.read_at || "";
   await fillDimSelects(form);
   form.onsubmit = async e => {
     e.preventDefault();

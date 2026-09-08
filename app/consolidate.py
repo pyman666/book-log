@@ -14,6 +14,8 @@ import re
 import sqlite3
 from pathlib import Path
 
+from .paths import resolve_book_path
+
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "books.db"
 
@@ -79,7 +81,7 @@ def run(dry_run=False):
             LEFT JOIN authors a ON a.id=ba.author_id GROUP BY b.id"""):
         g = groups[(base_title(r["title"]), r["au"] or "")]
         g["ids"].append(r["id"])
-        p = ROOT / r["file_path"] if r["file_path"] else None
+        p = resolve_book_path(ROOT, r["file_path"]) if r["file_path"] else None
         if p and p.is_file():
             g["files"][p] = None
 
@@ -125,7 +127,7 @@ def run(dry_run=False):
                 if f != target:
                     f.unlink()
             conn.executemany("UPDATE books SET file_path = ? WHERE id = ?",
-                             [(target.relative_to(ROOT).as_posix(), i) for i in g["ids"]])
+                             [(target.name, i) for i in g["ids"]])
     if not dry_run:
         conn.commit()
     sold_dir = ROOT / "raw" / "sold"

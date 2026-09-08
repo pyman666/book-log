@@ -200,6 +200,36 @@ def test_stats_daily(client):
     assert set(d) == {"2024-04-27", "2023-01-05"}
     assert d["2024-04-27"]["n"] == 2 and "活着" in d["2024-04-27"]["titles"]
 
+
+def test_stats_daily_follows_created(client):
+    """剁手日历按登记日：就算填了 read_at 也不往日历里挪。"""
+    client.post("/api/books", json={"title": "后补笔记", "created": "January 5, 2023 9:00 AM",
+                                    "read_at": "June 15, 2024 8:00 PM"})
+    d = client.get("/api/stats/daily").json()
+    assert "2023-01-05" in d
+    assert "2024-06-15" not in d
+
+
+def test_stats_curve_counts_only_rated(client):
+    """曲线只数“读过的一本”= 有评分；没打分的不入曲线。"""
+    _seed(client)                       # 3 本都有评分：2024-04 两本、2023-01 一本
+    client.post("/api/books", json={"title": "只买没读",
+                                    "created": "April 27, 2024 11:32 AM"})
+    rows = {r["period"]: r for r in client.get("/api/stats/curve", params={"gran": "month"}).json()}
+    assert rows["2024-04-01"]["n"] == 2 and "只买没读" not in rows["2024-04-01"]["titles"]
+    assert rows["2023-01-01"]["n"] == 1
+
+
+def test_stats_curve_prefers_read_at(client):
+    """曲线分桶：read_at 有值用它，没值回落 created（刚打分还没来得及填阅读日也不丢）。"""
+    client.post("/api/books", json={"title": "读过且填了日", "rating": 8,
+                                    "created": "January 5, 2023 9:00 AM",
+                                    "read_at": "June 15, 2024 8:00 PM"})
+    client.post("/api/books", json={"title": "刚打分", "rating": 7,
+                                    "created": "March 3, 2023 9:00 AM"})
+    assert [r["period"] for r in client.get("/api/stats/curve").json()] == ["2023-03-01", "2024-06-01"]
+
+
 def test_stats_spectrum(client):
     _seed(client)
     sp = {a["axis"]: {s["key"]: s["value"] for s in a["segments"]}
@@ -242,6 +272,23 @@ def test_yearly_endpoint(client, monkeypatch):
     assert len(calls) == 1                          # pending 查询不触发生成
     client.get("/api/ai/yearly", params={"year": 2024})
     assert len(calls) == 1                          # 缓存后不再调模型
+
+def test_yearly_portrait_only_rated_books(client, monkeypatch):
+    """年度画像只取打过分的话，跟曲线同口径：不然 2024 曲线 28 本、画像 prompt 108 本。"""
+    from app.ai import gen
+    prompts = []
+    def fake(msgs, **kw):
+        prompts.append(msgs[-1]["content"])
+        return "画像文本"
+    monkeypatch.setattr(gen.llm, "chat", fake)
+    client.post("/api/books", json={"title": "读过", "rating": 8,
+                                    "created": "April 27, 2024 11:32 AM"})
+    client.post("/api/books", json={"title": "只买没读",
+                                    "created": "April 27, 2024 11:32 AM"})
+    assert client.get("/api/ai/yearly").json()["years"] == [2024]
+    client.get("/api/ai/yearly", params={"year": 2024})
+    assert "《读过》" in prompts[0] and "只买没读" not in prompts[0]
+    assert client.get("/api/ai/yearly", params={"year": 2023}).status_code == 404
 
 def test_author_meta_fallback(client, monkeypatch):
     """LLM 调用失败 → 抛错（路由 502 / CLI 退出码 1）且不写库（chinese/nationality 保持 NULL），重新触发即重试。"""
@@ -363,7 +410,7 @@ def test_wall_endpoint(client, monkeypatch):
     w = client.get("/api/stats/wall").json()
     assert w["total"] == 2                                   # total 是全库本数
     assert [i["id"] for i in w["items"]] == [b1]             # items 只含磁盘有文件的
-    assert set(w["items"][0]) == {"id", "title", "created", "rating", "isbn"}
+    assert set(w["items"][0]) == {"id", "title", "read_at", "rating", "isbn"}
     assert w["items"][0]["isbn"] == "9781"
 
 def test_yearly_reads_from_app_root(client, tmp_path, monkeypatch):
@@ -376,6 +423,6 @@ def test_yearly_reads_from_app_root(client, tmp_path, monkeypatch):
     (tmp_path / "raw" / "books").mkdir(parents=True)
     (tmp_path / "raw" / "books" / "根探针笔记.md").write_text("探针内容:只存在于测试 vault", encoding="utf-8")
     client.post("/api/books", json={"title": "根探针", "file_path": "raw/books/根探针笔记.md",
-                                    "created": "April 27, 2024 11:32 AM"})
+                                    "rating": 8, "created": "April 27, 2024 11:32 AM"})
     assert client.get("/api/ai/yearly", params={"year": 2024}).status_code == 200
     assert "探针内容:只存在于测试 vault" in prompts[0]

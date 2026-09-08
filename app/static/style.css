@@ -70,6 +70,11 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 nav a { color: var(--text-secondary); text-decoration: none; margin-right: 14px; font-size: 13px; }
 nav a:hover { color: var(--series-1); }
 .actions button { margin-left: 8px; }
+/* 报头右上角 GitHub 猫头：跟 Sync/Push 同排，悬停浮印章红 */
+.hd-right .gh { display: grid; place-items: center; width: 32px; height: 32px;
+  border-radius: 50%; color: var(--text-secondary); transition: color .12s ease, transform .12s ease; }
+.hd-right .gh:hover { color: var(--series-1); transform: scale(1.1); }
+.hd-right .gh:focus-visible { outline: 2px solid rgba(204, 85, 51, .4); outline-offset: 1px; }
 
 main { max-width: 1120px; margin: 0 auto; padding: 20px 16px 48px; }
 button { padding: 6px 12px; border: 1px solid var(--border); border-radius: 6px;
@@ -185,18 +190,82 @@ button.ghost:hover { border-color: var(--series-1); color: var(--series-1); }
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
 table { width: 100%; border-collapse: collapse; background: var(--panel);
   border: 1px solid var(--border); border-radius: 10px; overflow: hidden; box-shadow: var(--shadow); }
-th, td { text-align: left; padding: 8px 12px; border-bottom: 1px solid var(--grid);
-  font-size: 13px; white-space: nowrap; }
+th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--grid);
+  font-size: 13px; white-space: normal; }   /* 长列（书名/国籍）自然换行，页面平铺不横向滚 */
 th { color: var(--muted); font-weight: 500; background: var(--surface-1); font-size: 12px; letter-spacing: .06em; }
 tbody tr { transition: background .12s ease; }
 tbody tr:hover { background: color-mix(in srgb, var(--series-1) 6%, transparent); }
 td.title { cursor: pointer; font-weight: 500; }
 td.title:hover { color: var(--series-1); }
-td input.inline { width: 64px; text-align: right; font-variant-numeric: tabular-nums; }
+td input.inline { width: 64px; font-variant-numeric: tabular-nums; }   /* 左对齐，跟表头统一 */
 td select.inline { width: auto; }
 .warn { color: var(--bad); font-size: 11px; }
 .pager { display: flex; gap: 12px; align-items: center; margin-top: 10px; }
 .pager span { color: var(--muted); font-size: 12px; }
+
+/* ---------- 可填的账本：书单页原地改账 ---------- */
+.toolbar .right { margin-left: auto; }
+/* 登记新书：左上角圆钮——印章红的圆 + 一枚「＋」，区别于行内药丸按钮 */
+.btn-circle { width: 42px; height: 42px; border-radius: 50%; flex: none; padding: 0;
+  display: grid; place-items: center; background: var(--series-1); color: #fff;
+  border: 1px solid var(--series-1); font: 700 24px/1 var(--font-display);
+  cursor: pointer; transition: transform .13s ease, box-shadow .13s ease; }
+.btn-circle:hover { transform: scale(1.08); color: #fff;
+  box-shadow: 0 6px 18px color-mix(in srgb, var(--series-1) 45%, transparent); }
+.btn-circle:focus-visible { outline: 2px solid color-mix(in srgb, var(--series-1) 60%, transparent);
+  outline-offset: 2px; }
+.tbl-wrap { border: 1px solid var(--border); border-radius: 10px;
+  background: var(--panel); box-shadow: var(--shadow); }
+.tbl-wrap table { border: 0; box-shadow: none; border-radius: 0;
+  table-layout: fixed; }   /* 列宽由 colgroup 百分比决定，自适应视口，不横向滚 */
+#tbl td input.inline, #tbl td select.inline { width: 100%; box-sizing: border-box; }
+#tbl th.s { cursor: pointer; user-select: none; }
+#tbl th.s:hover { color: var(--series-1); }
+#tbl th.s.on { color: var(--series-1); }
+/* 右半列（平台/数值/状态/日期）不换行：日期串含连字符会被当断点 */
+#tbl th:nth-child(n+6), #tbl td:nth-child(n+6) { white-space: nowrap; }
+/* 窄屏兜底：12 列挤不下就回到横向滚动，别把行压没 */
+@media (max-width: 900px) {
+  .tbl-wrap { overflow-x: auto; }
+  .tbl-wrap table { min-width: 1000px; }
+}
+.arr { margin-left: 4px; font-size: 11px; }
+.fill { background: none; border: 0; border-radius: 0; padding: 1px 3px; margin: 0;
+  font: inherit; color: inherit; cursor: pointer; text-align: left; width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  border-bottom: 1px dashed var(--axis); }
+.fill:hover { color: var(--series-1); border-bottom-color: var(--series-1);
+  background: color-mix(in srgb, var(--series-1) 7%, transparent); }
+.dull { color: var(--muted); }
+/* 阅读列 = 文本框（yyyy-mm-dd，格式自己控制，不跟浏览器 locale 走）+ 右侧小日历图标；
+   有值时图标隐掉、纯日期文本，空着才留图标当「点我选日期」的提示。
+   背景必须用长手写——background 简写里放 calc() 定位会触发 Chromium 解析 bug，整条声明被丢 */
+td input.dt { width: 100%; padding: 3px 22px 3px 6px; font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cg fill='none' stroke='%238b826b' stroke-width='1.5'%3E%3Crect x='1.5' y='3' width='13' height='12' rx='1.5'/%3E%3Cline x1='1.5' y1='7' x2='14.5' y2='7'/%3E%3Cline x1='5' y1='1' x2='5' y2='4.5' stroke-linecap='round'/%3E%3Cline x1='11' y1='1' x2='11' y2='4.5' stroke-linecap='round'/%3E%3C/g%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: calc(100% - 5px) 50%;   /* 描边式图标四条边完整，居中即可（Chromium 不认 right 关键字+offset 混合写法） */
+  background-size: 13px; }
+td input.dt.has { background-image: none; padding-right: 6px; }
+.dt-hidden { position: fixed; left: -9999px; top: 0; width: 1px; opacity: 0; pointer-events: none; }
+.pop { position: fixed; z-index: 40; background: var(--panel); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: 0 10px 28px rgba(33, 29, 21, .2); padding: 8px;
+  font-size: 13px; animation: pop-in .14s ease-out; }
+@keyframes pop-in { from { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) { .pop { animation: none; } }
+.pop-q { width: 100%; box-sizing: border-box; margin-bottom: 6px; font-size: 13px; }
+.pop-list { max-height: 240px; overflow-y: auto; }
+.pop-item { display: flex; gap: 8px; align-items: center; padding: 5px 8px; border-radius: 6px;
+  cursor: pointer; white-space: nowrap; overflow: hidden; }
+.pop-item:hover { background: color-mix(in srgb, var(--series-1) 8%, transparent); }
+.pop-item.on span { color: var(--series-1); font-weight: 600; }
+.pop-item input { accent-color: var(--series-1); margin: 0; }
+.pop-item span { overflow: hidden; text-overflow: ellipsis; }
+.pop-row { display: flex; gap: 8px; align-items: center; padding: 5px 8px; }
+.pop-row .pop-name { flex: 0 1 auto; max-width: 52%; overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; font-size: 13px; }
+.pop-row select { flex: 1 1 auto; min-width: 0; }
+.pop-empty { padding: 6px 8px; color: var(--muted); }
 
 /* ---------- 详情 ---------- */
 .detail { display: grid; grid-template-columns: 330px 1fr; gap: 14px; }

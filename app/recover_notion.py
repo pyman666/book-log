@@ -1,7 +1,7 @@
-"""一次性恢复：notion-export 里流失的笔记 → raw/books/。
+"""一次性恢复：raw/notion 里流失的笔记 → raw/books/。
 
-背景：当年从 notion-export 整理进 Books/ 时，在库书截掉了部分笔记（17 本）；
-售出/送出的书只留了元数据，65 本书的笔记只存在于 raw/notion-export/。
+背景：当年从 raw/notion 整理进 Books/ 时，在库书截掉了部分笔记（17 本）；
+售出/送出的书只留了元数据，65 本书的笔记只存在于 raw/notion/。
 
 - 在库：notion 页有、raw 文件没有的笔记行，追加到重叠度最高的 raw 文件，
   以 "## 补：来自 Notion 导出" 分节标记，不动已有内容。
@@ -20,7 +20,7 @@ from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-PAGES = ROOT / "raw" / "notion-export" / "Reading" / "Books"
+PAGES = ROOT / "raw" / "notion"
 RAW = ROOT / "raw" / "books"
 SOLD = RAW          # 已废弃的 raw/sold 不再重建：售出笔记与在库版本同住 raw/books/（同一 md）
 DB_PATH = ROOT / "books.db"
@@ -132,7 +132,7 @@ def run(dry_run=False):
             fname = base.replace("/", "／") + ".md"
             if not dry_run:
                 (SOLD / fname).write_text("\n".join(body) + "\n", encoding="utf-8")
-            written[base] = f"raw/books/{fname}"
+            written[base] = fname
         if written[base]:
             report["sold_records_linked"] += 1
             if not dry_run:
