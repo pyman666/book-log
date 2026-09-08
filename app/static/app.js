@@ -598,7 +598,7 @@ const dimBtn = (b, dim, val) =>
 function bookRow(b) {
   return `
     <tr data-id="${b.id}">
-      <td class="title">${esc(b.title)}${b.douban_id ? ` <a class="dbk" title="豆瓣" href="https://book.douban.com/subject/${b.douban_id}/" target="_blank" rel="noopener">🌐</a>` : ""}${b.status === "in_library" && !b.file_path ? '<span class="warn"> 无正文</span>' : ""}</td>
+      <td class="title">${esc(b.title)}${b.douban_id ? ` <a class="dbk" title="豆瓣" href="https://book.douban.com/subject/${b.douban_id}/" target="_blank" rel="noopener">🌐</a>` : ""}${b.status === "in_library" && !b.note_file ? '<span class="warn"> 无正文</span>' : ""}</td>
       ${dimBtn(b, "authors", (b.authors || []).join("、"))}
       <td><button class="fill" data-id="${b.id}" data-dim="nationality"
         title="按作者设置国籍（作者跨书共享，改动全局生效）">${
@@ -870,8 +870,8 @@ async function bookDetail(id) {
     const r = await fetch(`/api/books/${id}/content`);
     if (r.ok) content = await r.text();
   } catch (e) { /* 无正文 */ }
-  const obs = b.file_path
-    ? `<a class="obs" href="obsidian://open?vault=Books&file=${encodeURIComponent("raw/books/" + b.file_path)}">📖 在 Obsidian 打开</a>`
+  const obs = b.note_file
+    ? `<a class="obs" href="obsidian://open?vault=Books&file=${encodeURIComponent("raw/books/" + b.note_file)}">📖 在 Obsidian 打开</a>`
     : "";
   const dbk = b.douban_id
     ? `<a class="obs" href="https://book.douban.com/subject/${b.douban_id}/" target="_blank" rel="noopener">🌐 豆瓣</a>`
@@ -895,7 +895,7 @@ async function bookDetail(id) {
       <section class="panel"><h2>正文</h2>
         <div class="md">${content ? marked.parse(content) : "<p class='muted'>无正文文件</p>"}</div>
       </section>
-      ${b.file_path ? `<section class="panel wide"><h2>AI 读后摘要 <button id="sum-refresh" class="ghost right" title="重新生成">↻</button></h2>
+      ${b.note_file ? `<section class="panel wide"><h2>AI 读后摘要 <button id="sum-refresh" class="ghost right" title="重新生成">↻</button></h2>
         <div id="sum" class="md"><span class="muted"><span class="spin"></span>生成中…（首次约十几秒）</span></div></section>` : ""}
     </div>`;
   if (b.douban_id && !hasCover) {
@@ -912,7 +912,7 @@ async function bookDetail(id) {
       }
     };
   }
-  if (b.file_path) {
+  if (b.note_file) {
     const sum = $("#sum");
     const fetchSum = fresh => {
       const btn = $("#sum-refresh");
@@ -982,18 +982,5 @@ document.addEventListener("keydown", e => {
 window.addEventListener("load", () => {
   $("#tagline").textContent =
     `本地读书笔记账本 · ${new Date().toLocaleDateString("zh-CN", { year: "numeric", month: "long", day: "numeric" })}`;
-  $("#btn-sync").onclick = async () => {
-    try {
-      const r = await api("/api/sync", { method: "POST" });
-      toast(`Sync 完成：挂接 ${r.linked.length}，新增 ${r.created.length}，文件缺失 ${r.missing.length}` +
-        (r.created.length ? `（${r.created.join("、")}）` : ""), false, true);
-    } catch (e) { toast(e.message, true, true); }
-  };
-  $("#btn-push").onclick = async () => {
-    try {
-      const r = await api("/api/git/push", { method: "POST" });
-      toast(r.output, !r.ok, true);
-    } catch (e) { toast(e.message, true, true); }
-  };
   route();
 });

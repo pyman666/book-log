@@ -1,10 +1,9 @@
 """AI 摘要、年度画像与作者元数据路由。"""
 from fastapi import APIRouter, HTTPException, Request
 
-from .. import db as dbmod
+from .. import db as dbmod, notes
 from ..ai import gen
 from ..dependencies import conn_of
-from ..paths import normalize_file_path
 
 router = APIRouter()
 
@@ -15,9 +14,9 @@ def get_summary(request: Request, bid: int, fresh: int = 0):
         book = dbmod.get_book(conn, bid)
         if not book:
             raise HTTPException(404, "不存在")
+        notes.annotate(conn, request.app.state.root, [book])
         if fresh:
-            conn.execute("DELETE FROM ai_cache WHERE key = ?",
-                         (normalize_file_path(book["file_path"]),))
+            conn.execute("DELETE FROM ai_cache WHERE key = ?", (book["note_file"],))
             conn.commit()
         try:
             return gen.summarize_book(conn, request.app.state.root, book)

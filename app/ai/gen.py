@@ -5,8 +5,8 @@ import time
 from pathlib import Path
 
 from . import llm
-from .. import db as dbmod
-from ..paths import normalize_file_path, resolve_book_path
+from .. import db as dbmod, notes
+from ..paths import normalize_file_path
 
 DB_PATH = Path(__file__).resolve().parent.parent.parent / "books.db"
 
@@ -37,27 +37,25 @@ def cache_put(conn, key, mtime, text, model=None):
 
 
 def summarize_book(conn, root, book):
-    """返回 {summary, cached}。book 需含 title/file_path；无笔记文件时抛 ValueError。"""
-    fp = book.get("file_path")
+    """返回 {summary, cached}。book 需带 notes.annotate 填的 note_file；无笔记文件时抛 ValueError。
+    缓存 key 就是笔记文件名（与旧 file_path 列同值，所以旧缓存条目继续命中）。"""
+    fp = book.get("note_file")
     if not fp:
         raise ValueError("无正文文件")
-    try:
-        p = resolve_book_path(root, fp)
-    except ValueError:
-        raise ValueError("正文文件不存在")
-    if not p.is_file():
+    p = notes.note_path(root, fp)
+    if not p or not p.is_file():
         raise ValueError("正文文件不存在")
     mtime = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(p.stat().st_mtime))
     key = normalize_file_path(fp)
     hit = cache_get(conn, key, mtime)
     if hit:
         return {"summary": hit, "cached": True}
-    notes = p.read_text(encoding="utf-8")[:12000]
+    body = p.read_text(encoding="utf-8")[:12000]
     meta = f"《{book['title']}》 作者: {'、'.join(book.get('authors') or [])}"
     text = llm.chat([
         {"role": "system", "content": SYSTEM},
         {"role": "user", "content":
-            f"{meta}\n\n以下是我的读书笔记原文：\n\n{notes}\n\n"
+            f"{meta}\n\n以下是我的读书笔记原文：\n\n{body}\n\n"
             "请输出：第一行一句≤30字的导读（概括这本书在我笔记里聚焦什么）；"
             "空一行后写80~150字的摘要，站在我自己的笔记视角，不要营销腔。只要这两段，不要标题。"},
     ])
@@ -74,25 +72,22 @@ def yearly_portrait(conn, root, year):
     if hit:
         return {"text": hit, "cached": True}
     rows = conn.execute(
-        f"""SELECT b.title, b.file_path, b.rating, b.price, group_concat(a.name,'、') AS authors
+        f"""SELECT b.id, b.title, b.rating, b.price, group_concat(a.name,'、') AS authors
            FROM books b LEFT JOIN book_authors ba ON ba.book_id=b.id
            LEFT JOIN authors a ON a.id=ba.author_id
            WHERE b.rating IS NOT NULL AND year_of({dbmod.read_time('b')}) = ? GROUP BY b.id""",
         (year,)).fetchall()
     if not rows:
         raise ValueError(f"{year} 年没有书记录")
+    owned = notes.resolve(conn, root)                # 笔记文件名靠推导，库里不存
     parts, budget = [], 24000
     for r in rows:
         frag = f"《{r['title']}》{('/' + r['authors']) if r['authors'] else ''} 评分:{r['rating'] or '-'}"
-        if r["file_path"] and budget > 0:
-            try:
-                p = resolve_book_path(root, r["file_path"])
-            except ValueError:
-                p = None
-            if p and p.is_file():
-                excerpt = p.read_text(encoding="utf-8")[:min(500, budget)]
-                frag += f"\n笔记摘录: {excerpt}"
-                budget -= len(excerpt)   # 按实际拼入长度扣，budget 耗尽后剩余书才停止带摘录
+        p = notes.note_path(root, owned.get(r["id"]))
+        if p and budget > 0 and p.is_file():
+            excerpt = p.read_text(encoding="utf-8")[:min(500, budget)]
+            frag += f"\n笔记摘录: {excerpt}"
+            budget -= len(excerpt)   # 按实际拼入长度扣，budget 耗尽后剩余书才停止带摘录
         parts.append(frag)
     prompt = (f"这是我 {year} 年读过并打分的 {len(rows)} 本书及其部分笔记摘录：\n\n"
               + "\n\n".join(parts)[:24000] +
@@ -148,6 +143,8 @@ def ensure_author_meta(conn):
 def main():
     """CLI：python -m app.ai.gen --meta [--db 路径]（与 app/douban.py 同款一次性脚本模式）"""
     import argparse, sys
+    if hasattr(sys.stdout, "reconfigure"):          # 同 app.notes：Windows 控制台编码兜底
+        sys.stdout.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser(description="AI 一次性数据脚本")
     ap.add_argument("--meta", action="store_true",
                     help="批量判定作者国籍/华人标志（LLM）；失败不写库，可重跑")

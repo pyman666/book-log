@@ -5,7 +5,8 @@ import sqlite3
 from fastapi.testclient import TestClient
 
 from app import douban
-from app.main import create_app, local_cover_stems
+from app.dependencies import local_cover_stems
+from app.main import create_app
 
 
 def _db():

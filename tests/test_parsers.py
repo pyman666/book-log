@@ -62,7 +62,6 @@ def test_parse_book_full():
     assert b["status"] == "in_library"
     assert b["created"] == "April 27, 2024 11:32 AM"
     assert b["last_modified"] == "July 8, 2025 2:18 PM"
-    assert b["file_path"] is None
 
 def test_parse_book_multi_category():
     """68 本书有多个分类（YAML 数组），全部保留。"""

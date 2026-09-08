@@ -5,8 +5,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from . import db as dbmod
-from .dependencies import local_cover_stems
-from .routes import ai, books, covers, git, pages, stats, sync
+from .routes import ai, books, covers, pages, stats
 
 ROOT = Path(__file__).resolve().parent.parent
 DB_PATH = ROOT / "books.db"
@@ -37,7 +36,7 @@ def create_app(db_path: Path, root: Path) -> FastAPI:
     with dbmod.db_conn(app.state.db_path) as conn:
         dbmod.init_db(conn)
 
-    for route_module in (books, ai, stats, covers, sync, git, pages):
+    for route_module in (books, ai, stats, covers, pages):
         app.include_router(route_module.router)
     if STATIC_DIR.is_dir():
         app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

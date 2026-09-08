@@ -49,7 +49,7 @@ def test_list_filters(client):
 def test_content_endpoint(client, tmp_path):
     (tmp_path / "raw" / "books").mkdir(parents=True)
     (tmp_path / "raw" / "books" / "有正文.md").write_text("# 标题\n正文内容", encoding="utf-8")
-    bid = client.post("/api/books", json={"title": "有正文", "file_path": "raw/books/有正文.md"}).json()
+    bid = client.post("/api/books", json={"title": "有正文"}).json()
     r = client.get(f"/api/books/{bid}/content")
     assert r.status_code == 200 and "正文内容" in r.text
     bid2 = client.post("/api/books", json={"title": "无正文"}).json()
@@ -60,15 +60,16 @@ def test_content_strips_douban_header(client, tmp_path):
     hdr = '> **[《📖 某书](https://book.douban.com/subject/123/)**\n> 内容简介…\n\n'
     (tmp_path / "raw" / "books").mkdir(parents=True)
     (tmp_path / "raw" / "books" / "仅豆瓣头.md").write_text(hdr, encoding="utf-8")
-    b1 = client.post("/api/books", json={"title": "仅豆瓣头", "file_path": "raw/books/仅豆瓣头.md"}).json()
+    b1 = client.post("/api/books", json={"title": "仅豆瓣头"}).json()
     assert client.get(f"/api/books/{b1}/content").status_code == 404
     (tmp_path / "raw" / "books" / "豆瓣头加笔记.md").write_text(hdr + "# 我的笔记\n很好看", encoding="utf-8")
-    b2 = client.post("/api/books", json={"title": "豆瓣头加笔记", "file_path": "raw/books/豆瓣头加笔记.md"}).json()
+    b2 = client.post("/api/books", json={"title": "豆瓣头加笔记"}).json()
     r = client.get(f"/api/books/{b2}/content")
     assert r.status_code == 200 and "我的笔记" in r.text and "douban" not in r.text
 
 
-def test_content_traversal_blocked(client, tmp_path):
+def test_content_ignores_client_sent_path(client, tmp_path):
+    """库里不再有 file_path：客户端传什么都不认，只按命名法推导，路径穿越无从下手。"""
     (tmp_path / "secret.txt").write_text("secret", encoding="utf-8")
     bid = client.post("/api/books", json={"title": "穿越", "file_path": "../secret.txt"}).json()
     assert client.get(f"/api/books/{bid}/content").status_code == 404
@@ -163,20 +164,6 @@ def test_spectrum_excludes_placeholder_author(client):
     assert sp["读完没"]["未读"] == 1                     # 其它轴照常
 
 
-def test_git_push_commits_changes(client, tmp_path):
-    import subprocess
-    subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
-    subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)   # 把 fixture 建的 t.db 收进首个 commit
-    subprocess.run(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=tmp_path, check=True)
-    r1 = client.post("/api/git/push").json()
-    assert "nothing to commit" in r1["output"]                 # 无变更时如实报告
-    (tmp_path / "new.txt").write_text("x", encoding="utf-8")
-    r2 = client.post("/api/git/push").json()
-    n = subprocess.run(["git", "rev-list", "--count", "HEAD"], cwd=tmp_path,
-                       capture_output=True, text=True).stdout.strip()
-    assert n == "2"                                            # commit 成功（push 无 remote，ok=False 可接受）
-    assert "git push" in r2["output"]
-
 def test_douban_id(client):
     bid = client.post("/api/books", json={"title": "丙", "douban_id": "12345"}).json()
     assert client.get(f"/api/books/{bid}").json()["douban_id"] == "12345"
@@ -251,11 +238,16 @@ def test_list_year_filter(client):
 # ---------- AI ----------
 def test_summary_endpoint(client, tmp_path, monkeypatch):
     from app.ai import gen
-    monkeypatch.setattr(gen.llm, "chat", lambda msgs, **kw: "一句话摘要。")
+    prompts = []
+    def fake(msgs, **kw):
+        prompts.append(msgs[-1]["content"])
+        return "一句话摘要。"
+    monkeypatch.setattr(gen.llm, "chat", fake)
     (tmp_path / "raw" / "books").mkdir(parents=True)
     (tmp_path / "raw" / "books" / "活着.md").write_text("福贵的一生…", encoding="utf-8")
-    bid = client.post("/api/books", json={"title": "活着", "file_path": "raw/books/活着.md"}).json()
+    bid = client.post("/api/books", json={"title": "活着"}).json()
     assert client.get(f"/api/books/{bid}/summary").json() == {"summary": "一句话摘要。", "cached": False}
+    assert "福贵的一生" in prompts[0]      # 正文真拼进 prompt（局部变量别叫 notes，会遮蔽 app.notes）
     assert client.get(f"/api/books/{bid}/summary").json()["cached"] is True   # 命中缓存
     bno = client.post("/api/books", json={"title": "无笔记"}).json()
     assert client.get(f"/api/books/{bno}/summary").status_code == 404
@@ -363,7 +355,8 @@ def test_cli_meta_no_pending(tmp_path):
     with dbmod.db_conn(dbp) as c:
         dbmod.init_db(c)
     r = subprocess.run([sys.executable, "-m", "app.ai.gen", "--meta", "--db", str(dbp)],
-                       capture_output=True, text=True, cwd=Path(__file__).parent.parent)
+                       capture_output=True, text=True, encoding="utf-8",
+                       cwd=Path(__file__).parent.parent)
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout) == {"ok": True, "judged": 0, "total": 0, "pending": 0}
 
@@ -421,8 +414,8 @@ def test_yearly_reads_from_app_root(client, tmp_path, monkeypatch):
         prompts.append(msgs[-1]["content"]); return "画像文本"
     monkeypatch.setattr(gen.llm, "chat", fake)
     (tmp_path / "raw" / "books").mkdir(parents=True)
-    (tmp_path / "raw" / "books" / "根探针笔记.md").write_text("探针内容:只存在于测试 vault", encoding="utf-8")
-    client.post("/api/books", json={"title": "根探针", "file_path": "raw/books/根探针笔记.md",
+    (tmp_path / "raw" / "books" / "根探针.md").write_text("探针内容:只存在于测试 vault", encoding="utf-8")
+    client.post("/api/books", json={"title": "根探针",
                                     "rating": 8, "created": "April 27, 2024 11:32 AM"})
     assert client.get("/api/ai/yearly", params={"year": 2024}).status_code == 200
     assert "探针内容:只存在于测试 vault" in prompts[0]

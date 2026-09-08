@@ -69,7 +69,6 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 .hd-right { display: flex; align-items: center; gap: 14px; }
 nav a { color: var(--text-secondary); text-decoration: none; margin-right: 14px; font-size: 13px; }
 nav a:hover { color: var(--series-1); }
-.actions button { margin-left: 8px; }
 /* 报头右上角 GitHub 猫头：跟 Sync/Push 同排，悬停浮印章红 */
 .hd-right .gh { display: grid; place-items: center; width: 32px; height: 32px;
   border-radius: 50%; color: var(--text-secondary); transition: color .12s ease, transform .12s ease; }

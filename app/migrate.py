@@ -36,7 +36,6 @@ def collect():
         except Exception as e:  # noqa: BLE001
             errors.append(f"{f.name}: {e}")
             continue
-        b["file_path"] = f.name
         books.append(b)
     sold = parse_sold_table((BOOKS_DIR / "~售出.md").read_text(encoding="utf-8"))
     return books, sold, errors

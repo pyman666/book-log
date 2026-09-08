@@ -3,8 +3,6 @@ import re
 import sqlite3
 from contextlib import contextmanager
 
-from .paths import normalize_file_path
-
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, chinese INTEGER, nationality TEXT);
 CREATE TABLE IF NOT EXISTS publishers (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
@@ -22,14 +20,14 @@ CREATE TABLE IF NOT EXISTS books (
   created TEXT,
   read_at TEXT,                -- 阅读时间：只有读过（打过分）或人显式填过的才有值，其余 NULL
   last_modified TEXT,
-  file_path TEXT,             -- "书名.md"（位于 raw/books/）；同名同作者的多个版本/批次共用一个文件
   douban_id TEXT,             -- 豆瓣 subject 号（封面真源，可经 og:image 重推）；前端拼 https://book.douban.com/subject/{id}/
   platform_id INTEGER REFERENCES platforms(id)
+  -- 笔记正文不入库：raw/books/ 的文件名就是 (书名, 作者) 的纯函数，见 app/notes.py
   -- category 为多对多（book_categories）：数据中 68 本书有多个分类
   -- 无唯一约束：售出书 created 同为 NULL，同书名多批次只能靠应用层规则去重
 );
 CREATE TABLE IF NOT EXISTS ai_cache (
-  key TEXT PRIMARY KEY,        -- 书名文件路径 或 "yearly:<年>"
+  key TEXT PRIMARY KEY,        -- 笔记文件名（app.notes 推导，不是库里的列）或 "yearly:<年>"
   mtime TEXT,                  -- 源文件 mtime（失效判断）；年度画像为 NULL
   model TEXT,
   text TEXT NOT NULL,
@@ -131,14 +129,13 @@ def init_db(conn):
     _migrate_read_at(conn)
     if "cover_url" in cols:  # 封面已改为“磁盘文件存在性”，废弃 cover_url 列（douban_id 为真源）
         conn.execute("ALTER TABLE books DROP COLUMN cover_url")
+    if "file_path" in cols:  # 笔记文件名改为按命名法推导（app/notes.py），不再入库：
+        conn.execute("ALTER TABLE books DROP COLUMN file_path")   # 存了就要 Sync，Sync 就会造存根
     acols = {r[1] for r in conn.execute("PRAGMA table_info(authors)")}
     if "chinese" not in acols:  # 作者国籍（app.ai.gen.ensure_author_meta 填充）
         conn.execute("ALTER TABLE authors ADD COLUMN chinese INTEGER")
     if "nationality" not in acols:
         conn.execute("ALTER TABLE authors ADD COLUMN nationality TEXT")
-    for row in conn.execute("SELECT id, file_path FROM books WHERE file_path LIKE 'raw/books/%'").fetchall():
-        conn.execute("UPDATE books SET file_path = ? WHERE id = ?",
-                     (normalize_file_path(row["file_path"]), row["id"]))
     conn.commit()
 
 
@@ -196,11 +193,11 @@ def _replace_m2m(conn, bid, b):
 def _apply(conn, bid, b):
     conn.execute(
         """UPDATE books SET isbn=?, price=?, importance=?, progress=?, rating=?, status=?,
-               created=?, read_at=?, last_modified=?, file_path=?, douban_id=?, platform_id=?
+               created=?, read_at=?, last_modified=?, douban_id=?, platform_id=?
            WHERE id=?""",
         (b.get("isbn"), b.get("price"), b.get("importance"), b.get("progress"), b.get("rating"),
          b.get("status") or "in_library", b.get("created"), b.get("read_at"), b.get("last_modified"),
-         normalize_file_path(b.get("file_path")), b.get("douban_id") or None,
+         b.get("douban_id") or None,
          _dim(conn, "platforms", b.get("platform")), bid))
     _replace_m2m(conn, bid, b)
     conn.commit()
@@ -209,16 +206,10 @@ def _apply(conn, bid, b):
 def save_book(conn, b):
     """写一条书，返回 id。去重规则（无唯一约束，纯应用层）：
     - created 非空：title+created+last_modified 相同 = 同一记录（沿用旧去重标准）；
-      若存在同名"同步存根"（created 空、有 file_path）则填充它；
-    - created 空（售出书等）：一律新增——同书名可能有多批次。"""
+    - created 空（售出书等）：一律新增——同书名可能有多批次。
+    旧的“同名同步存根”填充规则已随 file_path 列一起消失：存根不再被创建，无需归并。"""
     title, created = b["title"], b.get("created")
     if created:
-        stub = conn.execute(
-            "SELECT id FROM books WHERE title = ? AND created IS NULL AND file_path IS NOT NULL",
-            (title,)).fetchone()
-        if stub:
-            _apply(conn, stub["id"], b)
-            return stub["id"]
         row = conn.execute(
             "SELECT id FROM books WHERE title = ? AND created = ? AND last_modified IS ?",
             (title, created, b.get("last_modified"))).fetchone()
@@ -227,12 +218,11 @@ def save_book(conn, b):
             return row["id"]
     cur = conn.execute(
         """INSERT INTO books (title, isbn, price, importance, progress, rating, status,
-                              created, read_at, last_modified, file_path, douban_id, platform_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              created, read_at, last_modified, douban_id, platform_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (title, b.get("isbn"), b.get("price"), b.get("importance"), b.get("progress"),
          b.get("rating"), b.get("status") or "in_library", created, b.get("read_at"),
-         b.get("last_modified"),
-         normalize_file_path(b.get("file_path")), b.get("douban_id") or None,
+         b.get("last_modified"), b.get("douban_id") or None,
          _dim(conn, "platforms", b.get("platform"))))
     bid = cur.lastrowid
     _replace_m2m(conn, bid, b)
@@ -247,7 +237,7 @@ def _shape(conn, row):
         "importance": row["importance"], "progress": row["progress"], "rating": row["rating"],
         "status": row["status"], "created": row["created"], "read_at": row["read_at"],
         "last_modified": row["last_modified"],
-        "file_path": row["file_path"], "douban_id": row["douban_id"],
+        "douban_id": row["douban_id"],
         "platform": row["platform"],
         "authors": _names(conn, "book_authors", "authors", "authors", "author_id", bid),
         "nationalities": [r[0] for r in conn.execute(

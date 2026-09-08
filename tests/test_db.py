@@ -12,16 +12,20 @@ def make(tmp_path):
 def B(title="测试", **kw):
     b = {"title": title, "isbn": None, "price": None, "importance": None, "progress": None,
          "rating": None, "status": "in_library", "created": None, "read_at": None,
-         "last_modified": None,
-         "file_path": None, "authors": [], "publishers": [], "categories": [], "platform": None}
+         "last_modified": None, "authors": [], "publishers": [], "categories": [], "platform": None}
     b.update(kw)
     return b
 
 
-def test_file_path_stores_book_filename_only(tmp_path):
+def test_legacy_file_path_column_is_dropped(tmp_path):
+    """旧库残留的 file_path 列在启动时被丢掉：路径只从命名法推导，不再入库。"""
     conn = make(tmp_path)
-    bid = save_book(conn, B(title="路径书", file_path="raw/books/路径书.md"))
-    assert get_book(conn, bid)["file_path"] == "路径书.md"
+    conn.execute("ALTER TABLE books ADD COLUMN file_path TEXT")
+    conn.execute("UPDATE books SET file_path = '测试书.md'")
+    conn.commit()
+    init_db(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(books)")}
+    assert "file_path" not in cols
 
 
 def test_read_at_has_no_default(tmp_path):
@@ -111,14 +115,13 @@ def test_null_created_always_insert(tmp_path):
     assert conn.execute("SELECT COUNT(*) FROM books").fetchone()[0] == 2
 
 
-def test_stub_absorption(tmp_path):
-    """sync 建的存根（created 空、有 file_path）在后来的正式记录应被填充而不是新建。"""
+def test_created_key_dedupe_survives_without_stubs(tmp_path):
+    """没有存根归并规则之后，title+created+last_modified 仍是唯一的去重键。"""
     conn = make(tmp_path)
-    save_book(conn, B(title="存根书", file_path="raw/存根书.md"))
-    bid = save_book(conn, B(title="存根书", file_path="raw/存根书.md",
-                            created="May 2, 2024 9:00 AM", price=5.0))
-    assert conn.execute("SELECT COUNT(*) FROM books").fetchone()[0] == 1
-    assert get_book(conn, bid)["created"] == "May 2, 2024 9:00 AM"
+    b1 = save_book(conn, B(title="去重书", created="May 2, 2024 9:00 AM", price=5.0))
+    b2 = save_book(conn, B(title="去重书", created="May 2, 2024 9:00 AM", price=6.0))
+    assert b1 == b2 and conn.execute("SELECT COUNT(*) FROM books").fetchone()[0] == 1
+    assert get_book(conn, b1)["price"] == 6.0
 
 
 def test_list_filters(tmp_path):

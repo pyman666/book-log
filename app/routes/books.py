@@ -5,10 +5,9 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 
-from .. import db as dbmod
+from .. import db as dbmod, notes
 from ..dependencies import conn_of, strip_douban_header
 from ..models import AuthorNatIn, BookIn
-from ..paths import resolve_book_path
 
 router = APIRouter()
 
@@ -22,11 +21,13 @@ def list_books(request: Request, q: Optional[str] = None, category: Optional[str
                year: Optional[int] = None, sort: str = "id", desc: bool = False,
                page: int = 1, page_size: int = Query(50, le=500)):
     with conn_of(request) as conn:
-        return dbmod.list_books(conn, q=q, category=category, author=author,
+        data = dbmod.list_books(conn, q=q, category=category, author=author,
                                 publisher=publisher, platform=platform, status=status,
                                 nationality=nationality, min_price=min_price,
                                 max_price=max_price, min_rating=min_rating, year=year,
                                 sort=sort, desc=desc, page=page, page_size=page_size)
+        notes.annotate(conn, request.app.state.root, data["items"])   # 正文文件名靠推导，不查库
+        return data
 
 
 @router.post("/api/books")
@@ -41,6 +42,8 @@ def create_book(payload: BookIn, request: Request):
 def get_book(request: Request, bid: int):
     with conn_of(request) as conn:
         book = dbmod.get_book(conn, bid)
+        if book:
+            notes.annotate(conn, request.app.state.root, [book])
     if not book:
         raise HTTPException(404, "不存在")
     return book
@@ -91,15 +94,15 @@ def delete_book(request: Request, bid: int):
 
 @router.get("/api/books/{bid}/content", response_class=PlainTextResponse)
 def get_content(request: Request, bid: int):
+    """笔记正文：文件名按命名法从 (书名, 作者) 推导，库里不存路径。"""
+    root = request.app.state.root
     with conn_of(request) as conn:
-        row = conn.execute("SELECT file_path FROM books WHERE id = ?", (bid,)).fetchone()
-    if not row or not row["file_path"]:
-        raise HTTPException(404, "无正文")
-    try:
-        path = resolve_book_path(request.app.state.root, row["file_path"])
-    except ValueError:
-        raise HTTPException(404, "无正文")
-    if not path.is_file():
+        exists = conn.execute("SELECT 1 FROM books WHERE id = ?", (bid,)).fetchone()
+        note = notes.resolve(conn, root).get(bid)
+    if not exists:
+        raise HTTPException(404, "不存在")
+    path = notes.note_path(root, note)
+    if not path or not path.is_file():
         raise HTTPException(404, "无正文")
     body = strip_douban_header(path.read_text(encoding="utf-8"))
     if not body:
