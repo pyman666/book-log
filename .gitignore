@@ -235,3 +235,4 @@ __marimo__/
 _trash
 .obsidian
 .claude
+.playwright*
