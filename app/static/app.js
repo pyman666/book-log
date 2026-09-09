@@ -832,6 +832,7 @@ function formPayload(form) {
   return {
     title: g("title"), authors: splitList(g("authors")), publishers: splitList(g("publishers")),
     categories: splitList(g("categories")), platform: g("platform") || null, isbn: g("isbn") || null,
+    douban_id: g("douban_id") || null,
     price: numOrNull(g("price")), progress: numOrNull(g("progress")), rating: numOrNull(g("rating")),
     importance: numOrNull(g("importance")), status: g("status") || "in_library",
     created: g("created") || null, read_at: g("read_at") || null,
@@ -892,7 +893,8 @@ async function bookDetail(id) {
           <button class="danger" type="button" id="d-del">删除记录</button></div>
         </form>
       </section>
-      <section class="panel"><h2>正文</h2>
+      <section class="panel"><h2>正文 <span class="muted note-src" title="文件按「书名.md / 书名（作者）.md」命名法推导，不入库">${
+        b.note_file ? esc(b.note_file) : "未匹配到 raw/books/ 文件 · 请按书名命名笔记"}</span></h2>
         <div class="md">${content ? marked.parse(content) : "<p class='muted'>无正文文件</p>"}</div>
       </section>
       ${b.note_file ? `<section class="panel wide"><h2>AI 读后摘要 <button id="sum-refresh" class="ghost right" title="重新生成">↻</button></h2>
