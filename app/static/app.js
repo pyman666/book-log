@@ -267,6 +267,7 @@ async function panelDistribution() {
     if (p.componentType !== "series") return;
     const row = distRows[distRows.length - 1 - p.dataIndex];
     if (!row) return;
+    if (DIST.by === "year") { toast("书单页已去掉年份筛选，年度维度只看不跳"); return; }
     Object.assign(filters, { category: "", author: "", publisher: "", platform: "",
                              nationality: "", year: "" });
     filters[DIST.by] = String(row.key);
@@ -473,7 +474,7 @@ async function panelYearlyAI() {
 
 // ---------- 书单 ----------
 const filters = { q: "", category: "", author: "", publisher: "", platform: "",
-                  nationality: "", year: "",
+                  nationality: "",
                   status: "in_library", sort: "created", desc: "true", page: 1 };
 
 const MONS = "January February March April May June July August September October November December".split(" ");
@@ -507,7 +508,6 @@ async function booksView() {
       ${sel("nationality", f.nationalities, "全部国籍")}
       ${sel("publisher", f.publishers, "全部出版社")}
       ${sel("platform", f.platforms, "全部平台")}
-      ${sel("year", f.years, "全部年份")}
       <select data-f="status"><option value="">全部状态</option>
         <option value="in_library" ${filters.status === "in_library" ? "selected" : ""}>在库</option>
         <option value="sold" ${filters.status === "sold" ? "selected" : ""}>已售</option></select>
@@ -515,14 +515,14 @@ async function booksView() {
       <button id="f-new" class="btn-circle" title="登记新书" aria-label="登记新书">＋</button>
     </div>
     <div class="tbl-wrap"><table id="tbl"><colgroup>
-      <col style="width:17%"><col style="width:11%"><col style="width:7%"><col style="width:8%">
-      <col style="width:11%"><col style="width:7%"><col style="width:7%"><col style="width:7%">
-      <col style="width:7%"><col style="width:8%"><col style="width:10%">
+      <col style="width:19.4%"><col style="width:10.8%"><col style="width:7%"><col style="width:12%">
+      <col style="width:14%"><col style="width:6.5%"><col style="width:8.7%"><col style="width:6%">
+      <col style="width:6%"><col style="width:9.6%">
     </colgroup><thead><tr>
       <th class="s" data-sort="title">书名</th><th>作者</th><th>国籍</th><th>分类</th><th>出版社</th>
       <th>平台</th>
       <th class="s" data-sort="price">价格</th><th class="s" data-sort="progress">进度</th>
-      <th class="s" data-sort="rating">评分</th><th>状态</th>
+      <th>状态</th>
       <th class="s" data-sort="read_at">阅读</th>
     </tr></thead><tbody></tbody></table></div>
     <div class="pager"><button id="pg-prev">上一页</button><span id="pg-info"></span>
@@ -530,6 +530,7 @@ async function booksView() {
     <div id="book-form" class="panel hidden"></div>`;
   const apply = () => {
     filters.q = $("#f-q").value.trim();
+    delete filters.year;                    // 年份下拉已删：顺手清掉分布面板可能残留的跳转筛选
     view.querySelectorAll("[data-f]").forEach(el => (filters[el.dataset.f] = el.value));
     filters.page = 1;
     loadBooks();
@@ -608,8 +609,7 @@ function bookRow(b) {
       ${dimBtn(b, "platform", b.platform)}
       <td><input class="inline" data-field="price" value="${b.price ?? ""}" placeholder="—" aria-label="价格"></td>
       <td><input class="inline" data-field="progress" value="${b.progress ?? ""}" placeholder="—" aria-label="进度"></td>
-      <td><input class="inline" data-field="rating" value="${b.rating ?? ""}" placeholder="—" aria-label="评分"></td>
-      <td><select class="inline" data-field="status" aria-label="状态">
+      <td><select class="inline st${b.status ? " has" : ""}" data-field="status" title="点击切换 在库 / 已售" aria-label="状态">
         <option value="in_library" ${b.status === "in_library" ? "selected" : ""}>在库</option>
         <option value="sold" ${b.status === "sold" ? "selected" : ""}>已售</option></select></td>
       <td><input type="text" class="inline dt${dateOf(b.read_at) ? " has" : ""}" data-field="read_at"

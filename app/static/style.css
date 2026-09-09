@@ -204,6 +204,8 @@ td select.inline { width: auto; }
 
 /* ---------- 可填的账本：书单页原地改账 ---------- */
 .toolbar .right { margin-left: auto; }
+/* 筛选下拉统一宽：内容长短不齐（出版社 174 vs 其他 90）看着碎，拉齐 */
+.toolbar select { width: 126px; flex: none; }
 /* 登记新书：左上角圆钮——印章红的圆 + 一枚「＋」，区别于行内药丸按钮 */
 .btn-circle { width: 42px; height: 42px; border-radius: 50%; flex: none; padding: 0;
   display: grid; place-items: center; background: var(--series-1); color: #fff;
@@ -223,7 +225,13 @@ td select.inline { width: auto; }
 #tbl th.s.on { color: var(--series-1); }
 /* 右半列（平台/数值/状态/日期）不换行：日期串含连字符会被当断点 */
 #tbl th:nth-child(n+6), #tbl td:nth-child(n+6) { white-space: nowrap; }
-/* 窄屏兜底：12 列挤不下就回到横向滚动，别把行压没 */
+/* 状态列：有值时把原生下拉箭头藏掉（跟 .dt.has 同一路数）——两个字的值配二十几像素的
+   箭头是纯浪费；没值的行保留箭头当占位。交互提示靠 hover 变色 + title */
+#tbl td select.st { padding: 3px 6px; box-sizing: border-box; }
+#tbl td select.st.has { -webkit-appearance: none; appearance: none; background-image: none;
+  cursor: pointer; }
+#tbl td select.st.has:hover { color: var(--series-1); }
+/* 窄屏兜底：列太多挤不下就回到横向滚动，别把行压没 */
 @media (max-width: 900px) {
   .tbl-wrap { overflow-x: auto; }
   .tbl-wrap table { min-width: 1000px; }
