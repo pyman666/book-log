@@ -503,11 +503,11 @@ async function booksView() {
   view.innerHTML = `
     <div class="toolbar">
       <input id="f-q" placeholder="书名 / ISBN" value="${filters.q}">
-      ${sel("author", f.authors, "全部作者")}
-      ${sel("category", f.categories, "全部分类")}
-      ${sel("nationality", f.nationalities, "全部国籍")}
-      ${sel("publisher", f.publishers, "全部出版社")}
-      ${sel("platform", f.platforms, "全部平台")}
+      ${sel("author", f.authors, "作者")}
+      ${sel("category", f.categories, "分类")}
+      ${sel("nationality", f.nationalities, "国籍")}
+      ${sel("publisher", f.publishers, "出版社")}
+      ${sel("platform", f.platforms, "平台")}
       <select data-f="status"><option value="">全部状态</option>
         <option value="in_library" ${filters.status === "in_library" ? "selected" : ""}>在库</option>
         <option value="sold" ${filters.status === "sold" ? "selected" : ""}>已售</option></select>
