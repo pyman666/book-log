@@ -125,7 +125,7 @@ def init_db(conn):
     if "file_path" in cols:  # 笔记文件名改为按命名法推导（app/notes.py），不再入库：
         conn.execute("ALTER TABLE books DROP COLUMN file_path")   # 存了就要 Sync，Sync 就会造存根
     acols = {r[1] for r in conn.execute("PRAGMA table_info(authors)")}
-    if "chinese" not in acols:  # 作者国籍（app.ai.gen.ensure_author_meta 填充）
+    if "chinese" not in acols:  # 作者国籍：数据保留（LLM 判定代码已下线），手工走 PUT /api/authors/nationality
         conn.execute("ALTER TABLE authors ADD COLUMN chinese INTEGER")
     if "nationality" not in acols:
         conn.execute("ALTER TABLE authors ADD COLUMN nationality TEXT")
