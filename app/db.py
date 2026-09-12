@@ -333,3 +333,64 @@ def facets(conn):
     return {"categories": categories, "platforms": platforms,
             "authors": authors, "publishers": publishers,
             "nationalities": nats, "years": years}
+def stats_summary(conn):
+    r = conn.execute(
+        """SELECT SUM(status = 'in_library') AS in_lib,
+                  SUM(status = 'sold') AS sold,
+                  SUM(progress = 100) AS finished,
+                  AVG(rating) AS avg_rating,
+                  SUM(price) AS net,
+                  SUM(CASE WHEN price > 0 THEN price END) AS loss,
+                  SUM(CASE WHEN price < 0 THEN -price END) AS gain,
+                  SUM(price IS NOT NULL) AS priced
+           FROM books""").fetchone()
+    return {k: (round(v, 2) if isinstance(v, float) else v) for k, v in dict(r).items()}
+
+
+def stats_group(conn, by, agg="count"):
+    """按维度聚合。by: category|platform|author|publisher|year|rating|nationality；
+    agg: count|sum_price|avg_rating。NULL 价格不参与金额；多值维度不重复计数同一本书。"""
+    if agg not in ("count", "sum_price", "avg_rating"):
+        raise ValueError(f"bad agg: {agg}")
+    src = {
+        "category": "SELECT b.id, b.price, b.rating, c.name AS key FROM books b "
+                    "JOIN book_categories bc ON bc.book_id = b.id "
+                    "JOIN categories c ON c.id = bc.category_id",
+        "platform": "SELECT b.id, b.price, b.rating, f.name AS key FROM books b "
+                    "LEFT JOIN platforms f ON f.id = b.platform_id",
+        "author": "SELECT b.id, b.price, b.rating, a.name AS key FROM books b "
+                  "JOIN book_authors ba ON ba.book_id = b.id JOIN authors a ON a.id = ba.author_id",
+        "publisher": "SELECT b.id, b.price, b.rating, p.name AS key FROM books b "
+                     "JOIN book_publishers bp ON bp.book_id = b.id JOIN publishers p ON p.id = bp.publisher_id",
+        # 国籍：按作者国名（authors.nationality，ensure_author_meta 填充）；
+        # 未判定/空的归「未标注」；多国籍书在每个国家各计一次（同 author 维度语义）
+        "nationality": "SELECT b.id, b.price, b.rating, "
+                       "COALESCE(NULLIF(a.nationality, ''), '未标注') AS key FROM books b "
+                       "JOIN book_authors ba ON ba.book_id=b.id JOIN authors a ON a.id=ba.author_id",
+        "year": f"SELECT b.id, b.price, b.rating, year_of({read_time('b')}) AS key FROM books b",
+        "rating": "SELECT b.id, b.price, b.rating, b.rating AS key FROM books b",
+    }[by]
+    default_label = {"rating": "未评分", "year": "未知"}.get(by, "未分类")
+    groups = {}
+    for r in conn.execute(src):
+        key = r["key"] if r["key"] is not None else default_label
+        g = groups.setdefault(key, {"ids": set(), "price": 0.0, "has_price": False, "ratings": []})
+        if r["id"] not in g["ids"]:
+            g["ids"].add(r["id"])
+            if r["price"] is not None:
+                g["price"] += r["price"]
+                g["has_price"] = True
+            if r["rating"] is not None:
+                g["ratings"].append(r["rating"])
+    out = []
+    for key, g in groups.items():
+        item = {"key": key, "count": len(g["ids"])}
+        if agg == "sum_price":
+            item["value"] = round(g["price"], 2) if g["has_price"] else None
+        elif agg == "avg_rating":
+            item["value"] = round(sum(g["ratings"]) / len(g["ratings"]), 2) if g["ratings"] else None
+        else:
+            item["value"] = len(g["ids"])
+        out.append(item)
+    out.sort(key=lambda x: (x["value"] is None, -(x["value"] or 0)))
+    return out

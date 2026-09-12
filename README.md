@@ -44,6 +44,22 @@ uv run uvicorn app.main:build_app --factory --host 127.0.0.1 --port 8000
 - 没留过字的书 `raw/books/` 里没有文件（262 本空壳已清理），前端按推导结果标"无正文"
 - 分类/作者/出版社可多个（逗号分隔）；平台单值
 
+## 仪表盘
+
+六块面板，全部纯 SQL 只读聚合（`app/analytics.py` + `app/routes/stats.py`，无 LLM）：
+
+- **壹·书架**：iPod Cover Flow 式 3D 书架（随机开场，点封面进详情，← → 翻书）；只显本地已有封面的书
+- **贰·剁手日历**：年度热力格（按 `created`）——一天买几本
+- **叁·口味光谱**：体裁/语言/完成度三轴堆叠条（语言轴读 `authors.chinese` 现值）
+- **肆·评分×重要度**：散点象限，气泡=盈亏，红亏绿赚
+- **伍·读书节奏**：月度/季度曲线，只数打过分的书
+- **陆·分布**：维度（国籍/作者/出版社/类别/平台/年度）× 指标（本数/金额）单图切换，点柱条跳书单页带筛选
+
+图表色全走 `style.css` token，深浅色自动跟随。数据端点：`GET /api/stats/{summary|daily|curve|spectrum|quadrant|group|wall}`。
+
+> 原**柒·AI 年度画像**与详情页**AI 读后摘要**、作者国籍 LLM 判定已于 2026-07 下线（等好 idea；捞尸 `git show 2bb38cc:app/ai`）。
+> `authors.nationality/chinese` 两列**数据**保留（判过一次、重判费 token）：手工维护 `PUT /api/authors/nationality`，光谱与书单国籍筛选照常消费。
+
 ## 封面
 
 - **`app/douban.py`** —— 豆瓣封面，**以 `douban_id` 为真源**（og:image → 下载 → `raw/covers/<isbn>.<ext>`）。

@@ -85,6 +85,56 @@ def test_facets(client):
     assert f["platforms"] == ["京东"] and f["publishers"] == []
 
 
+def test_summary(client):
+    client.post("/api/books", json={"title": "a", "price": 5.0, "categories": ["科幻"], "rating": 8})
+    client.post("/api/books", json={"title": "b", "price": -2.0, "categories": ["科幻"]})
+    client.post("/api/books", json={"title": "c", "progress": 100, "status": "sold", "price": 1.0})
+    s = client.get("/api/stats/summary").json()
+    assert s["in_lib"] == 2 and s["sold"] == 1
+    assert s["finished"] == 1
+    assert s["net"] == 4.0 and s["loss"] == 6.0 and s["gain"] == 2.0
+    assert s["priced"] == 3 and s["avg_rating"] == 8.0
+
+
+def test_group(client):
+    client.post("/api/books", json={"title": "a", "price": 5.0, "categories": ["科幻"],
+                                    "created": "April 27, 2024 11:32 AM", "rating": 9})
+    client.post("/api/books", json={"title": "b", "price": -2.0, "categories": ["科幻"],
+                                    "created": "October 7, 2023 3:29 PM"})
+    g = client.get("/api/stats/group", params={"by": "category", "agg": "sum_price"}).json()
+    assert g[0]["key"] == "科幻" and g[0]["value"] == 3.0
+    dy = {str(x["key"]): x["value"] for x in
+          client.get("/api/stats/group", params={"by": "year", "agg": "count"}).json()}
+    assert dy["2024"] == 1 and dy["2023"] == 1
+    dr = {str(x["key"]): x["value"] for x in
+          client.get("/api/stats/group", params={"by": "rating", "agg": "count"}).json()}
+    assert dr["9"] == 1
+    assert client.get("/api/stats/group", params={"by": "nope"}).status_code == 400
+    assert client.get("/api/stats/group", params={"by": "year", "agg": "bogus"}).status_code == 400
+
+
+def test_group_nationality(client):
+    from app import db as dbmod
+    client.post("/api/books", json={"title": "甲", "authors": ["余华"], "price": 10})
+    client.post("/api/books", json={"title": "乙", "authors": ["加缪"], "price": -4})
+    client.post("/api/books", json={"title": "丙"})   # 无作者：不进国籍维度（JOIN）
+    with dbmod.db_conn(client.app.state.db_path) as c:
+        c.execute("UPDATE authors SET nationality='中国' WHERE name='余华'")
+        c.execute("UPDATE authors SET nationality='法国' WHERE name='加缪'")
+        c.commit()
+    g = {x["key"]: x["value"] for x in
+         client.get("/api/stats/group", params={"by": "nationality"}).json()}
+    assert g == {"中国": 1, "法国": 1}
+    gm = {x["key"]: x["value"] for x in
+          client.get("/api/stats/group", params={"by": "nationality", "agg": "sum_price"}).json()}
+    assert gm["中国"] == 10 and gm["法国"] == -4
+    # 未判定（nationality 为 NULL）归入「未标注」
+    client.post("/api/books", json={"title": "丁", "authors": ["未判定作者"]})
+    g2 = {x["key"]: x["value"] for x in
+          client.get("/api/stats/group", params={"by": "nationality"}).json()}
+    assert g2["未标注"] == 1
+
+
 def test_list_nationality_filter(client):
     from app import db as dbmod
     client.post("/api/books", json={"title": "甲", "authors": ["余华"],
@@ -101,6 +151,19 @@ def test_list_nationality_filter(client):
     assert f["nationalities"] == ["中国", "法国"]
     assert f["years"] == [2024]                          # 年度筛选选项
     assert client.get("/api/books", params={"year": 2024}).json()["total"] == 1
+
+
+def test_spectrum_excludes_placeholder_author(client):
+    """占位作者「其它」(chinese=0, 54 本垃圾桶) 不得污染语言轴的"翻译"计数。"""
+    from app import db as dbmod
+    client.post("/api/books", json={"title": "占位书", "authors": ["其它"]})
+    with dbmod.db_conn(client.app.state.db_path) as c:
+        c.execute("UPDATE authors SET chinese=0, nationality='未知' WHERE name='其它'")
+        c.commit()
+    sp = {a["axis"]: {s["key"]: s["value"] for s in a["segments"]}
+          for a in client.get("/api/stats/spectrum").json()}
+    assert sp.get("语言", {}) == {}                      # 语言轴不计占位作者
+    assert sp["读完没"]["未读"] == 1                     # 其它轴照常
 
 
 def test_douban_id(client):
@@ -121,6 +184,57 @@ def _seed(client):
         "rating": 8, "importance": 0.5, "price": -20, "created": "January 5, 2023 9:00 AM"})
     client.post("/api/books", json={"title": "八月HALF", "authors": ["宝春溪"], "categories": ["传记"],
         "rating": 7, "importance": 0.8, "price": 40, "created": "April 27, 2024 11:32 AM"})
+
+
+def test_stats_daily(client):
+    _seed(client)
+    d = client.get("/api/stats/daily").json()
+    assert set(d) == {"2024-04-27", "2023-01-05"}
+    assert d["2024-04-27"]["n"] == 2 and "活着" in d["2024-04-27"]["titles"]
+
+
+def test_stats_daily_follows_created(client):
+    """剁手日历按登记日：就算填了 read_at 也不往日历里挪。"""
+    client.post("/api/books", json={"title": "后补笔记", "created": "January 5, 2023 9:00 AM",
+                                    "read_at": "June 15, 2024 8:00 PM"})
+    d = client.get("/api/stats/daily").json()
+    assert "2023-01-05" in d
+    assert "2024-06-15" not in d
+
+
+def test_stats_curve_counts_only_rated(client):
+    """曲线只数“读过的一本”= 有评分；没打分的不入曲线。"""
+    _seed(client)                       # 3 本都有评分：2024-04 两本、2023-01 一本
+    client.post("/api/books", json={"title": "只买没读",
+                                    "created": "April 27, 2024 11:32 AM"})
+    rows = {r["period"]: r for r in client.get("/api/stats/curve", params={"gran": "month"}).json()}
+    assert rows["2024-04-01"]["n"] == 2 and "只买没读" not in rows["2024-04-01"]["titles"]
+    assert rows["2023-01-01"]["n"] == 1
+
+
+def test_stats_curve_prefers_read_at(client):
+    """曲线分桶：read_at 有值用它，没值回落 created（刚打分还没来得及填阅读日也不丢）。"""
+    client.post("/api/books", json={"title": "读过且填了日", "rating": 8,
+                                    "created": "January 5, 2023 9:00 AM",
+                                    "read_at": "June 15, 2024 8:00 PM"})
+    client.post("/api/books", json={"title": "刚打分", "rating": 7,
+                                    "created": "March 3, 2023 9:00 AM"})
+    assert [r["period"] for r in client.get("/api/stats/curve").json()] == ["2023-03-01", "2024-06-01"]
+
+
+def test_stats_spectrum(client):
+    _seed(client)
+    sp = {a["axis"]: {s["key"]: s["value"] for s in a["segments"]}
+          for a in client.get("/api/stats/spectrum").json()}
+    assert sp["读什么"]["小说·戏剧"] == 2 and sp["读什么"]["思想·人文·实用"] == 1
+    assert sp["语言"]["原创"] == 2 and sp["语言"]["翻译"] == 1
+    assert sp["读完没"]["未读"] == 3
+
+
+def test_stats_quadrant(client):
+    _seed(client)
+    q = client.get("/api/stats/quadrant").json()
+    assert len(q) == 3 and all({"rating", "importance", "price"} <= set(p) for p in q)
 
 
 def test_list_year_filter(client):
@@ -161,3 +275,20 @@ def test_cover_network_error_is_502(client, monkeypatch):
     monkeypatch.setattr(dmod.httpx, "get", neterr)
     b1 = client.post("/api/books", json={"title": "有豆瓣号", "douban_id": "999"}).json()
     assert client.post(f"/api/books/{b1}/cover").status_code == 502
+
+
+def test_wall_endpoint(client, monkeypatch):
+    """书架只显有本地封面文件的书（判据 = 磁盘文件，不是 DB 列）。"""
+    import app.douban as dmod
+    monkeypatch.setattr(dmod, "fetch_cover_url",
+                        lambda i, **k: f"https://img3.doubanio.com/s{i}.jpg")
+    monkeypatch.setattr(dmod, "_download", lambda u, **k: b"x")
+    b1 = client.post("/api/books", json={"title": "有封面", "douban_id": "1", "isbn": "9781", "rating": 9,
+                                         "created": "April 27, 2024 11:32 AM"}).json()
+    client.post(f"/api/books/{b1}/cover")                       # 落盘 9781
+    client.post("/api/books", json={"title": "无封面", "isbn": "9782"})   # 有 isbn 但未落盘
+    w = client.get("/api/stats/wall").json()
+    assert w["total"] == 2                                   # total 是全库本数
+    assert [i["id"] for i in w["items"]] == [b1]             # items 只含磁盘有文件的
+    assert set(w["items"][0]) == {"id", "title", "read_at", "rating", "isbn"}
+    assert w["items"][0]["isbn"] == "9781"
