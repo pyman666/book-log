@@ -1,6 +1,5 @@
 from app import db as dbmod
-from app.db import (get_db, get_book, init_db, list_books, save_book, stats_group,
-                    stats_summary, update_book)
+from app.db import get_db, get_book, init_db, list_books, save_book, update_book
 
 
 def make(tmp_path):
@@ -43,16 +42,15 @@ def test_polluted_read_at_keeps_only_rated(tmp_path):
     save_book(conn, B(title="读过", created="April 1, 2024 10:00 AM", rating=8))
     save_book(conn, B(title="售出", rating=None))
     conn.execute("UPDATE books SET read_at = created WHERE created IS NOT NULL")  # 复现老迁移
+    conn.execute("CREATE TABLE ai_cache (key TEXT PRIMARY KEY, text TEXT NOT NULL)")
     conn.execute("INSERT INTO ai_cache (key, text) VALUES ('yearly:2024', '旧画像')")
-    conn.execute("INSERT INTO ai_cache (key, text) VALUES ('活着.md', '单本摘要')")
     conn.execute("PRAGMA user_version = 1")                     # 回到治理前的库
     conn.commit()
     dbmod.init_db(conn)
     assert dict(conn.execute("SELECT title, read_at FROM books").fetchall()) == {
         "没读": None, "读过": "April 1, 2024 10:00 AM", "售出": None}
-    # 年度画像旧文本随口径变更作废，单本摘要不受影响
-    assert [r[0] for r in conn.execute(
-        "SELECT key FROM ai_cache ORDER BY key")] == ["活着.md"]
+    # AI 缓存表已下线：init_db 顺手把它从存量库 DROP 掉
+    assert conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='ai_cache'").fetchone()[0] == 0
     conn.execute("UPDATE books SET read_at = created WHERE title = '没读'")
     conn.commit()
     dbmod.init_db(conn)                                         # 再启动一次，不二次抹值
@@ -76,7 +74,6 @@ def test_year_filters_use_read_time_with_created_fallback(tmp_path):
     save_book(conn, B(title="另一年", created="April 1, 2022", read_at="May 2, 2023"))
     assert [i["title"] for i in list_books(conn, year=2024)["items"]] == ["按阅读年", "只有登记日"]
     assert dbmod.facets(conn)["years"] == [2024, 2023]
-    assert {row["key"] for row in stats_group(conn, "year")} == {2024, 2023}
 
 
 def test_save_and_get(tmp_path):
@@ -146,58 +143,3 @@ def test_update_partial(tmp_path):
     assert b["rating"] == 9 and b["price"] == 1.5 and b["authors"] == ["甲"]
     update_book(conn, bid, {"price": None})                 # 显式清空
     assert get_book(conn, bid)["price"] is None
-
-
-def test_summary_nulls(tmp_path):
-    """NULL 价格不参与金额；正=亏损 负=净赚。"""
-    conn = make(tmp_path)
-    save_book(conn, B(title="a", price=5.0, rating=8))
-    save_book(conn, B(title="b", price=-2.0))
-    save_book(conn, B(title="c", progress=100))
-    s = stats_summary(conn)
-    assert s["net"] == 3.0
-    assert s["loss"] == 5.0
-    assert s["gain"] == 2.0
-    assert s["priced"] == 2
-    assert s["finished"] == 1
-    assert s["in_lib"] == 3
-    assert s["avg_rating"] == 8.0
-
-
-def test_group_category_price(tmp_path):
-    conn = make(tmp_path)
-    save_book(conn, B(title="a", categories=["科幻"], price=10.0))
-    save_book(conn, B(title="b", categories=["科幻"], price=-4.0))
-    save_book(conn, B(title="c", categories=["传记"], price=1.0))
-    d = {x["key"]: x["value"] for x in stats_group(conn, "category", "sum_price")}
-    assert d["科幻"] == 6.0
-    assert d["传记"] == 1.0
-
-
-def test_group_multi_category_counts_each(tmp_path):
-    """多分类书计入每个分类，但 count 不重复、sum 按分类各计一次。"""
-    conn = make(tmp_path)
-    save_book(conn, B(title="a", categories=["科幻", "经典"], price=4.0))
-    d = {x["key"]: x["value"] for x in stats_group(conn, "category", "sum_price")}
-    assert d["科幻"] == 4.0 and d["经典"] == 4.0
-    assert stats_group(conn, "category", "count")[0]["value"] == 1
-
-
-def test_group_year_and_rating(tmp_path):
-    conn = make(tmp_path)
-    save_book(conn, B(title="a", created="April 27, 2024 11:32 AM", rating=9))
-    save_book(conn, B(title="b", created="October 7, 2023 3:29 PM"))
-    dy = {str(x["key"]): x["value"] for x in stats_group(conn, "year", "count")}
-    assert dy["2024"] == 1 and dy["2023"] == 1
-    dr = {str(x["key"]): x["value"] for x in stats_group(conn, "rating", "count")}
-    assert dr["9"] == 1 and dr["未评分"] == 1
-
-
-def test_multi_author_no_double_count(tmp_path):
-    """一书两作者：group by author 时 count 不重复，sum_price 不翻倍。"""
-    conn = make(tmp_path)
-    save_book(conn, B(title="双", authors=["甲", "乙"], price=3.0))
-    da = {x["key"]: x for x in stats_group(conn, "author", "sum_price")}
-    assert da["甲"]["value"] == 3.0
-    assert da["乙"]["value"] == 3.0
-    assert stats_group(conn, "author", "count")[0]["value"] == 1

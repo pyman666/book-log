@@ -26,13 +26,6 @@ CREATE TABLE IF NOT EXISTS books (
   -- category 为多对多（book_categories）：数据中 68 本书有多个分类
   -- 无唯一约束：售出书 created 同为 NULL，同书名多批次只能靠应用层规则去重
 );
-CREATE TABLE IF NOT EXISTS ai_cache (
-  key TEXT PRIMARY KEY,        -- 笔记文件名（app.notes 推导，不是库里的列）或 "yearly:<年>"
-  mtime TEXT,                  -- 源文件 mtime（失效判断）；年度画像为 NULL
-  model TEXT,
-  text TEXT NOT NULL,
-  updated TEXT
-);
 CREATE TABLE IF NOT EXISTS book_authors (
   book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
   author_id INTEGER REFERENCES authors(id),
@@ -136,6 +129,8 @@ def init_db(conn):
         conn.execute("ALTER TABLE authors ADD COLUMN chinese INTEGER")
     if "nationality" not in acols:
         conn.execute("ALTER TABLE authors ADD COLUMN nationality TEXT")
+    # AI 面板/摘要已下线（idea 没想好，git 里留着尸骨）：缓存表连数据一并清掉
+    conn.execute("DROP TABLE IF EXISTS ai_cache")
     conn.commit()
 
 
@@ -150,12 +145,11 @@ def _migrate_read_at(conn):
     NULL。写入侧从此不再有默认值，read_at 只能是人填的。
     ⚠ 只跑一次（user_version）：跨这个迁移回滚代码不会自动重跑治理——老代码的无条件回填
     会把污染复位，再升回来时版本已是 2、治理跳过；回滚过就要手动 `PRAGMA user_version = 1`
-    再启动一次。年度画像的旧文本同时作废：它的取书口径跟着改成「只算读过的书」，可重生成。"""
+    再启动一次。"""
     if conn.execute("PRAGMA user_version").fetchone()[0] >= _READ_AT_CLEANED:
         return
     conn.execute("UPDATE books SET read_at = NULL "
                  "WHERE rating IS NULL AND created IS NOT NULL AND read_at = created")
-    conn.execute("DELETE FROM ai_cache WHERE key LIKE 'yearly:%'")
     conn.execute(f"PRAGMA user_version = {_READ_AT_CLEANED}")
 
 
@@ -339,66 +333,3 @@ def facets(conn):
     return {"categories": categories, "platforms": platforms,
             "authors": authors, "publishers": publishers,
             "nationalities": nats, "years": years}
-
-
-def stats_summary(conn):
-    r = conn.execute(
-        """SELECT SUM(status = 'in_library') AS in_lib,
-                  SUM(status = 'sold') AS sold,
-                  SUM(progress = 100) AS finished,
-                  AVG(rating) AS avg_rating,
-                  SUM(price) AS net,
-                  SUM(CASE WHEN price > 0 THEN price END) AS loss,
-                  SUM(CASE WHEN price < 0 THEN -price END) AS gain,
-                  SUM(price IS NOT NULL) AS priced
-           FROM books""").fetchone()
-    return {k: (round(v, 2) if isinstance(v, float) else v) for k, v in dict(r).items()}
-
-
-def stats_group(conn, by, agg="count"):
-    """按维度聚合。by: category|platform|author|publisher|year|rating|nationality；
-    agg: count|sum_price|avg_rating。NULL 价格不参与金额；多值维度不重复计数同一本书。"""
-    if agg not in ("count", "sum_price", "avg_rating"):
-        raise ValueError(f"bad agg: {agg}")
-    src = {
-        "category": "SELECT b.id, b.price, b.rating, c.name AS key FROM books b "
-                    "JOIN book_categories bc ON bc.book_id = b.id "
-                    "JOIN categories c ON c.id = bc.category_id",
-        "platform": "SELECT b.id, b.price, b.rating, f.name AS key FROM books b "
-                    "LEFT JOIN platforms f ON f.id = b.platform_id",
-        "author": "SELECT b.id, b.price, b.rating, a.name AS key FROM books b "
-                  "JOIN book_authors ba ON ba.book_id = b.id JOIN authors a ON a.id = ba.author_id",
-        "publisher": "SELECT b.id, b.price, b.rating, p.name AS key FROM books b "
-                     "JOIN book_publishers bp ON bp.book_id = b.id JOIN publishers p ON p.id = bp.publisher_id",
-        # 国籍：按作者国名（authors.nationality，ensure_author_meta 填充）；
-        # 未判定/空的归「未标注」；多国籍书在每个国家各计一次（同 author 维度语义）
-        "nationality": "SELECT b.id, b.price, b.rating, "
-                       "COALESCE(NULLIF(a.nationality, ''), '未标注') AS key FROM books b "
-                       "JOIN book_authors ba ON ba.book_id=b.id JOIN authors a ON a.id=ba.author_id",
-        "year": f"SELECT b.id, b.price, b.rating, year_of({read_time('b')}) AS key FROM books b",
-        "rating": "SELECT b.id, b.price, b.rating, b.rating AS key FROM books b",
-    }[by]
-    default_label = {"rating": "未评分", "year": "未知"}.get(by, "未分类")
-    groups = {}
-    for r in conn.execute(src):
-        key = r["key"] if r["key"] is not None else default_label
-        g = groups.setdefault(key, {"ids": set(), "price": 0.0, "has_price": False, "ratings": []})
-        if r["id"] not in g["ids"]:
-            g["ids"].add(r["id"])
-            if r["price"] is not None:
-                g["price"] += r["price"]
-                g["has_price"] = True
-            if r["rating"] is not None:
-                g["ratings"].append(r["rating"])
-    out = []
-    for key, g in groups.items():
-        item = {"key": key, "count": len(g["ids"])}
-        if agg == "sum_price":
-            item["value"] = round(g["price"], 2) if g["has_price"] else None
-        elif agg == "avg_rating":
-            item["value"] = round(sum(g["ratings"]) / len(g["ratings"]), 2) if g["ratings"] else None
-        else:
-            item["value"] = len(g["ids"])
-        out.append(item)
-    out.sort(key=lambda x: (x["value"] is None, -(x["value"] or 0)))
-    return out

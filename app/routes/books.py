@@ -109,3 +109,10 @@ def get_content(request: Request, bid: int):
         raise HTTPException(404, "无正文")
     return body
 
+
+
+@router.get("/api/facets")
+def facets(request: Request):
+    """书单页筛选下拉的维度字典（只含挂到至少一本书的值）。"""
+    with conn_of(request) as conn:
+        return dbmod.facets(conn)

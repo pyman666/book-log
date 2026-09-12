@@ -44,23 +44,17 @@ uv run uvicorn app.main:build_app --factory --host 127.0.0.1 --port 8000
 - 没留过字的书 `raw/books/` 里没有文件（262 本空壳已清理），前端按推导结果标"无正文"
 - 分类/作者/出版社可多个（逗号分隔）；平台单值
 
-## 仪表盘 & AI
+## 封面
 
-后端三块，互不依赖，可单测（全部有测试覆盖）：
-
-- **`app/analytics.py`** — 只读纯聚合：`daily_counts`（剁手日历，按 `created`）、`reading_curve`（节奏曲线，只数有评分的书）、`taste_spectrum`（口味光谱三轴，语言轴用 `authors.chinese`；占位作者「其它/无」不参与）、`quadrant`（评分×重要度）、`cover_wall`（书架数据，`GET /api/stats/wall` 只出 5 字段）；国籍分布走 `stats_group?by=nationality`。路由零加工直出。
-- **视觉**：暖纸编辑排版（Anthropic 式米色纸底 + 朱砂印章 + 宋体展示字 + 章节号）；封面是 iPod Cover Flow 式 3D 书架（随机开场、左右留隐藏封面，点封面进详情，← → 翻书）；全部图表色走 `style.css` token（8-slot 分类色过 validate_palette.js 双模式）；系统切深浅色时页面自动重渲染。
-- **`app/douban.py`** — 豆瓣封面，**以 `douban_id` 为真源**（og:image → 下载 → `raw/covers/<isbn>.<ext>`）。
-  封面真值 = **磁盘上是否存在 `<isbn>` 文件**，DB 不再存 URL（豆瓣 CDN 2026-09 起校验 Referer，浏览器热链大面积 403，封面必须本地化）。三种用法：
+- **`app/douban.py`** —— 豆瓣封面，**以 `douban_id` 为真源**（og:image → 下载 → `raw/covers/<isbn>.<ext>`）。
+  封面真值 = **磁盘上是否存在 `<isbn>` 文件**，DB 不存 URL（豆瓣 CDN 2026-09 起校验 Referer，浏览器热链大面积 403，封面必须本地化）。三种用法：
   `--localize` 遍历有 douban_id+isbn、尚缺本地封面的书，逐本 og:image→下载落盘（同 isbn 多批次去重、占位图跳过）；
   手动补图按 `<isbn>.jpg` 扔进 `raw/covers/` 即自动被识别（**无需挂接命令**，存在即关联）；单本按需 `POST /api/books/{id}/cover`。
-  共用纪律：2.5s+抖动限速、成功即落盘、Ctrl-C 安全、幂等续跑、连续 6 败刹车。前端经 `/cover/<isbn>`（忽略扩展名、无文件 404）取图，`/api/covers` 出本地清单，书架只显示已落封面的书。
-- **`app/ai/`** — DashScope Qwen（OpenAI 兼容 SDK）。`llm.py` 只管 chat()（key 读 bosch-ai-framework/.env 的 DASHSCOPE_API_KEY，不入库不入 git）；`gen.py` 管缓存（`ai_cache` 表：笔记按**推导出的文件名**+mtime 失效，key 与旧 file_path 同串所以旧缓存继续命中；年度按 `yearly:<年>`）与提示词。
-  - `GET /api/books/{id}/summary[?fresh=1]` 单本 AI 读后摘要
-  - `GET /api/ai/yearly?year=N[&fresh=1|&pending=1]` 年度画像（只取打过分的书，与节奏曲线同口径）；pending=1 只查缓存不生成
-  - 作者国籍判定 `ensure_author_meta`：显式触发——`POST /api/ai/author-meta` 或 `uv run python -m app.notes            # 只读体检：磁盘 md 数、被认领的本数、没人认领的文件、无笔记的在库书
-uv run python -m app.ai.gen --meta`（LLM 一把判定 → `authors.nationality`（中文国名）+ `authors.chinese`（0/1），幂等；失败不写库可重跑，LLM 漏判的个别名字走启发式兜底）。口味光谱纯读，未判定时语言轴按启发式临时算，前端给"判定"按钮
-- **分布面板**（伍）：单图动态切换 维度（国籍/作者/出版社/类别/平台/年度）× 指标（本数/净花费），点柱条跳书单页并自动带对应筛选（如 nationality=法国）；`GET /api/books` 新增 `nationality`/`year` 参数，书单页有国籍列与国籍/年份筛选器
+  共用纪律：2.5s+抖动限速、成功即落盘、Ctrl-C 安全、幂等续跑、连续 6 败刹车。前端经 `/cover/<isbn>`（忽略扩展名、无文件 404）取图，`/api/covers` 出本地清单。
+- **视觉**：暖纸编辑排版（Anthropic 式米色纸底 + 朱砂印章 + 宋体展示字）；系统深浅色自动跟随。
+
+> 仪表盘 / AI 摘要 / 年度画像 / 3D 书架已于 2026-07 整体下线——代码在 git 里（`git show 2bb38cc:app/ai` 等可整块捞回），等好 idea 再上。
+> `authors.nationality/chinese` 两列**数据**保留（LLM 判过一次、重判费 token），判定代码已删；手工维护走 `PUT /api/authors/nationality`，书单页国籍筛选器继续可用。
 
 ## 目录与存档
 
@@ -83,9 +77,8 @@ uv run python -m app.ai.gen --meta`（LLM 一把判定 → `authors.nationality`
 uv run python -m app.douban --localize  # 以 douban_id 为源，逐本 og:image→下载 raw/covers/<isbn>（限速，428本约35分钟，可断点续跑）
 uv run python -m app.douban --test <id>  # 只打印某 douban_id 的 og:image URL（调试用）
 # 手工补图：按 <isbn>.jpg 放进 raw/covers/ 即可，前端自动识别（无需命令）
-uv run python -m app.notes            # 只读体检：磁盘 md 数、被认领的本数、没人认领的文件、无笔记的在库书
-uv run python -m app.ai.gen --meta   # 批量判定作者国籍/华人标志（LLM，幂等；失败不写库可重跑）
-uv run pytest -q                     # 76 测试，全离线（LLM/抓取均 monkeypatch）；import app.main 不碰生产 books.db
+uv run python -m app.notes           # 只读体检：磁盘 md 数、被认领的本数、没人认领的文件、无笔记的在库书
+uv run pytest -q                     # 全离线（抓取均 monkeypatch）；import app.main 不碰生产 books.db
 ```
 
 ## 一次性脚本（已执行，留档备查；**不再可跑**）
