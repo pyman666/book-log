@@ -462,11 +462,12 @@ async function booksView() {
       <col style="width:14%"><col style="width:6.5%"><col style="width:8.7%"><col style="width:6%">
       <col style="width:6%"><col style="width:9.6%">
     </colgroup><thead><tr>
-      <th class="s" data-sort="title">书名</th><th>作者</th><th>国籍</th><th>分类</th><th>出版社</th>
+      <th class="s" data-sort="title" title="点击：排序 · 再点翻转 · 再点取消">书名</th><th>作者</th><th>国籍</th><th>分类</th><th>出版社</th>
       <th>平台</th>
-      <th class="s" data-sort="price">价格</th><th class="s" data-sort="progress">进度</th>
+      <th class="s" data-sort="price" title="点击：排序 · 再点翻转 · 再点取消">价格</th>
+      <th class="s" data-sort="progress" title="点击：排序 · 再点翻转 · 再点取消">进度</th>
       <th>状态</th>
-      <th class="s" data-sort="read_at">阅读</th>
+      <th class="s" data-sort="read_at" title="点击：排序 · 再点翻转 · 再点取消">阅读</th>
     </tr></thead><tbody></tbody></table></div>
     <div class="pager"><button id="pg-prev">上一页</button><span id="pg-info"></span>
       <button id="pg-next">下一页</button></div>`;
@@ -515,11 +516,18 @@ async function booksView() {
   await loadBooks();
 }
 
-// 点列名排序：同列翻转方向；换列给一个顺手的默认方向（时间/数字降序在前，文字升序在前）
+// 点列名排序三态循环：第一次=该列默认方向（时间/数字降序在前，文字升序在前），
+// 第二次=翻转，第三次=取消按这列排（回默认顺序：最新在前）
 const SORT_DESC_FIRST = new Set(["price", "progress", "rating", "read_at", "created"]);
+const DEFAULT_SORT = { sort: "created", desc: "true" };
+function nextSortState(sort, desc, col) {
+  const def = SORT_DESC_FIRST.has(col) ? "true" : "false";
+  if (sort !== col) return { sort: col, desc: def };
+  if (desc === def) return { sort: col, desc: def === "true" ? "false" : "true" };
+  return { ...DEFAULT_SORT };
+}
 function sortBy(col) {
-  if (filters.sort === col) filters.desc = filters.desc === "true" ? "false" : "true";
-  else { filters.sort = col; filters.desc = SORT_DESC_FIRST.has(col) ? "true" : "false"; }
+  Object.assign(filters, nextSortState(filters.sort, filters.desc, col));
   filters.page = 1;
   loadBooks();
 }

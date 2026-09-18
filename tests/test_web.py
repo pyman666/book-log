@@ -4,7 +4,10 @@
 没带这个键——PUT 走 `exclude_unset=True`，于是"填了不保存"且毫无报错。这类 bug 静态
 比对一次就能钉死，不必跑浏览器。
 """
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 
 from app.models import BookIn
@@ -71,3 +74,37 @@ def test_detail_platform_value_not_set_before_options():
     assert 'el("platform").value' not in js, "详情页又在选项就位前给平台赋值了"
     fn = re.search(r"async function fillDimSelects\(.*?\n\}", js, re.S).group(0)
     assert ".value =" in fn, "fillDimSelects 没有在选项就位后恢复当前值"
+
+
+def test_sort_three_state_cycle():
+    """点列名三态：第一次按该列排（默认方向），第二次翻转，第三次取消（回最新在前）。"""
+    js = _js()
+    m = re.search(r"function nextSortState\([^)]*\)\s*\{.*?\n\}", js, re.S)
+    assert m, "nextSortState 没了（排序三态逻辑改了？）"
+    pre = re.search(r"const SORT_DESC_FIRST = new Set\(\[.*?\]\);\nconst DEFAULT_SORT = \{[^}]*\};", js, re.S).group(0)
+    driver = m.group(0) + """
+const t = (sort, desc, col) => nextSortState(sort, desc, col);
+console.log(JSON.stringify([
+  t("created", "true", "title"),
+  t("title", "false", "title"),
+  t("title", "true", "title"),
+  t("created", "true", "price"),
+  t("price", "true", "price"),
+  t("price", "false", "price"),
+]));
+"""
+    node = shutil.which("node")
+    if not node:
+        import pytest
+        pytest.skip("node 不可用")
+    out = subprocess.run([node, "-e", pre + driver], capture_output=True, text=True)
+    assert out.returncode == 0, out.stderr
+    a, b, c, d, e, f = json.loads(out.stdout)
+    # 文字列：升序 → 降序 → 取消
+    assert (a, b, c) == ({"sort": "title", "desc": "false"},
+                         {"sort": "title", "desc": "true"},
+                         {"sort": "created", "desc": "true"})
+    # 数字列：降序 → 升序 → 取消
+    assert (d, e, f) == ({"sort": "price", "desc": "true"},
+                         {"sort": "price", "desc": "false"},
+                         {"sort": "created", "desc": "true"})
