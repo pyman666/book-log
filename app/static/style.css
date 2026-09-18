@@ -282,7 +282,7 @@ td input.dt.has { background-image: none; padding-right: 6px; }
 #tbl tr.new-row { background: color-mix(in srgb, var(--series-1) 5%, transparent); }
 #tbl tr.new-row:hover { background: color-mix(in srgb, var(--series-1) 8%, transparent); }
 #tbl tr.new-row.sub td { background: var(--surface-1); border-bottom: 1px solid var(--axis); }
-#tbl tr.new-row input { width: 100%; box-sizing: border-box; }
+#tbl tr.new-row:not(.sub) input { width: 100%; }   /* 只管主行（书名输入格铺满）；副行的定宽小框另走 .n-extra 规则 */
 #tbl .n-extra { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
 #tbl .n-extra label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
 #tbl .n-extra input { width: 108px; }
