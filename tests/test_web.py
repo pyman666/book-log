@@ -61,3 +61,13 @@ def test_new_book_row_reuses_table_controls():
         assert f'name="{name}"' in block, f"新书行漏了字段 {name}"
     # 保存走 POST /api/books，取消/保存都有着落
     assert 'api("/api/books", { method: "POST"' in js
+
+
+def test_detail_platform_value_not_set_before_options():
+    """平台下拉的选项是 fillDimSelects 异步填的：在选项就位前给 select 赋值不生效，
+    详情页保存时提交 null 反而把书单页刚选的平台清掉。值只能在 fillDimSelects
+    里选项就位后恢复，详情页不许先手赋值。"""
+    js = _js()
+    assert 'el("platform").value' not in js, "详情页又在选项就位前给平台赋值了"
+    fn = re.search(r"async function fillDimSelects\(.*?\n\}", js, re.S).group(0)
+    assert ".value =" in fn, "fillDimSelects 没有在选项就位后恢复当前值"

@@ -785,10 +785,16 @@ const BOOK_FIELDS = `
     <option value="in_library">在库</option><option value="sold">已售</option></select></label>
   <label>阅读时间（可空；留空则聚合时按创建时间归年）<input name="read_at"></label>`;
 
-async function fillDimSelects(form) {
+// 平台下拉的选项是异步填的：先赋值不生效（选项还没进 select，.value 恒为 ""），
+// 保存时提交 null 反而把刚在书单页选的平台清掉。所以值必须在本函数里
+// 选项就位之后恢复；候选池里没有的值补一个 option 兜底，不许静默丢选。
+async function fillDimSelects(form, platform = "") {
   const f = await api("/api/facets");
+  const vals = [...f.platforms];
+  if (platform && !vals.includes(platform)) vals.push(platform);
   form.elements.platform.innerHTML = `<option value="">—</option>` +
-    f.platforms.map(v => `<option>${v}</option>`).join("");
+    vals.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
+  form.elements.platform.value = platform;
 }
 
 function formPayload(form) {
@@ -972,7 +978,6 @@ async function bookDetail(id) {
   el("authors").value = (b.authors || []).join("、");
   el("publishers").value = (b.publishers || []).join("、");
   el("categories").value = (b.categories || []).join("、");
-  el("platform").value = b.platform || "";
   el("isbn").value = b.isbn || "";
   el("douban_id").value = b.douban_id || "";
   el("price").value = b.price ?? "";
@@ -981,7 +986,7 @@ async function bookDetail(id) {
   el("importance").value = b.importance ?? "";
   el("status").value = b.status;
   el("read_at").value = b.read_at || "";
-  await fillDimSelects(form);
+  await fillDimSelects(form, b.platform || "");
   form.onsubmit = async e => {
     e.preventDefault();
     try {
