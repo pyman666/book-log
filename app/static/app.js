@@ -68,7 +68,7 @@ async function dashboard() {
         <div class="heat-wrap"><div class="chart" id="ch-heat"></div><div class="heat-stat" id="heat-stat"></div></div></section>
       <section class="panel span7"><h2><span class="no">叁</span><span class="t">口味光谱</span><span class="hint">读什么 · 什么语言 · 读完没</span></h2>
         <div class="chart" id="ch-spectrum"></div></section>
-      <section class="panel span5"><h2><span class="no">肆</span><span class="t">评分 × 重要度</span><span class="hint">气泡=盈亏，红=亏 绿=赚</span></h2>
+      <section class="panel span5"><h2><span class="no">肆</span><span class="t">评分 × 重要度</span><span class="hint">气泡=盈亏，红=支出 绿=收入</span></h2>
         <div class="chart" id="ch-quadrant"></div></section>
       <section class="panel wide"><h2><span class="no">伍</span><span class="t">读书节奏</span><span class="hint">只数打过分的书 · 每期读完几本</span>
         <select id="curve-gran" class="inline right" title="时间粒度">
@@ -84,9 +84,9 @@ async function dashboard() {
   const lg = (k, v, sub) =>
     `<div class="lg"><span class="k">${k}</span><span class="v">${v}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</div>`;
   $("#ledger").innerHTML =
-    `<div class="lg hero"><span class="k">净花费（元）</span><span class="v ${s.net > 0 ? "bad" : s.net < 0 ? "good" : ""}">${fmt(s.net)}</span><span class="sub">正=亏 负=赚</span></div>` +
+    `<div class="lg hero"><span class="k">净花费（元）</span><span class="v ${s.net > 0 ? "bad" : s.net < 0 ? "good" : ""}">${fmt(s.net)}</span><span class="sub">正=支出 负=收入</span></div>` +
     lg("在库", s.in_lib) + lg("已售", s.sold) + lg("读完", s.finished, "读完一本划掉一本") +
-    lg("其中亏损", fmt(s.loss)) + lg("其中净赚", fmt(s.gain)) + lg("有价书数", s.priced);
+    lg("其中支出", fmt(s.loss)) + lg("其中收入", fmt(s.gain)) + lg("有价书数", s.priced);
 
   // 新面板：失败不互相阻塞（如 LLM 配额、封面未抓完）
   [panelHeatmap, panelCurve, panelSpectrum, panelQuadrant, panelShelf, panelDistribution]
@@ -264,11 +264,11 @@ async function drawDist() {
   }
   distRows = rows;
   const isMoney = DIST.agg === "sum_price";
-  $("#dist-hint").textContent = (isMoney ? "元，红=亏 绿=赚" : "本数") +
+  $("#dist-hint").textContent = (isMoney ? "元，红=支出 绿=收入" : "本数") +
     (DIST.by === "year" ? " · 全部年份" : " · Top 12");
   distChart.setOption({
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" },
-      valueFormatter: v => isMoney ? `${v} 元 · ${v >= 0 ? "亏" : "赚"}` : `${v} 本` },
+      valueFormatter: v => isMoney ? `${v} 元 · ${v >= 0 ? "支出" : "收入"}` : `${v} 本` },
     xAxis: { type: "value" },
     yAxis: { type: "category", data: [...rows].reverse().map(x => x.key),
       axisLabel: { color: cssVar("--text-secondary") } },
@@ -291,7 +291,7 @@ async function panelQuadrant() {
     grid: { left: 8, right: 30, top: 30, bottom: 24, containLabel: true },
     tooltip: { confine: true,
       formatter: p => `${p.data.title}\n评分 ${p.data.value[0]} · 重要度 ${p.data.value[1]}` +
-        (p.data.price != null ? `\n${p.data.price >= 0 ? "亏" : "赚"} ¥${Math.abs(p.data.price).toFixed(2)}` : "\n无价格") },
+        (p.data.price != null ? `\n${p.data.price >= 0 ? "支出" : "收入"} ¥${Math.abs(p.data.price).toFixed(2)}` : "\n无价格") },
     xAxis: { type: "value", min: 1, max: 10, name: "评分", nameLocation: "middle", nameGap: 26,
       nameTextStyle: { color: cssVar("--muted") } },
     yAxis: { type: "value", min: 0, max: 1, name: "重要度", nameTextStyle: { color: cssVar("--muted") } },
@@ -301,7 +301,7 @@ async function panelQuadrant() {
         value: [p.rating, p.importance],
         symbolSize: 12 + Math.sqrt(Math.abs(p.price || 0)) * 1.5,
         itemStyle: { opacity: .75,
-          // 无价格 = 中性灰（不读作亏损）；负=赚 蓝；正=亏 红
+          // 无价格 = 中性灰（不读作亏损）；负=收入 蓝；正=支出 红
           color: p.price == null ? cssVar("--muted")
             : p.price < 0 ? cssVar("--div-neg") : cssVar("--div-pos") } })),
       emphasis: { scale: 1.25 },
@@ -469,8 +469,7 @@ async function booksView() {
       <th class="s" data-sort="read_at">阅读</th>
     </tr></thead><tbody></tbody></table></div>
     <div class="pager"><button id="pg-prev">上一页</button><span id="pg-info"></span>
-      <button id="pg-next">下一页</button></div>
-    <div id="book-form" class="panel hidden"></div>`;
+      <button id="pg-next">下一页</button></div>`;
   const apply = () => {
     filters.q = $("#f-q").value.trim();
     delete filters.year;                    // 年份下拉已删：顺手清掉分布面板可能残留的跳转筛选
@@ -481,7 +480,7 @@ async function booksView() {
   $("#f-apply").onclick = apply;
   $("#f-q").addEventListener("keydown", e => { if (e.key === "Enter") apply(); });
   view.querySelectorAll("[data-f]").forEach(s => s.addEventListener("change", apply));
-  $("#f-new").onclick = showBookForm;
+  $("#f-new").onclick = toggleNewRow;
   $("#tbl thead").addEventListener("click", e => {
     const th = e.target.closest("th.s");
     if (th) sortBy(th.dataset.sort);
@@ -494,7 +493,10 @@ async function booksView() {
     const dt = e.target.closest("input.dt");
     if (dt) { openDtPicker(dt); return; }                    // 点输入框任意处弹原生日期选择器
     const title = e.target.closest("td.title");
-    if (title) location.hash = `#/book/${title.closest("tr").dataset.id}`;
+    if (title) {
+      if (title.closest("tr.new-row")) return;   // 新行的书名是输入框，点击不导航
+      location.hash = `#/book/${title.closest("tr").dataset.id}`;
+    }
   });
   // 共享的原生日期选择器（藏屏外）：showPicker 弹出，显示格式由单元格的文本控制（yyyy-mm-dd）
   const dtPicker = document.createElement("input");
@@ -564,6 +566,7 @@ async function loadBooks() {
   const p = new URLSearchParams();
   Object.entries(filters).forEach(([k, v]) => { if (v !== "" && v != null) p.set(k, v); });
   const data = await api(`/api/books?${p}`);
+  if (draft) syncInputsToDraft();   // 表体即将被整体替换，先把新书行里已填的值快照进草稿
   rowItems.clear();
   data.items.forEach(b => rowItems.set(b.id, b));
   $("#tbl tbody").innerHTML = data.items.map(bookRow).join("") ||
@@ -573,6 +576,7 @@ async function loadBooks() {
   $("#pg-prev").disabled = data.page <= 1;
   $("#pg-next").disabled = data.page >= pages;
   renderSortMarks();
+  if (draft) showNewRow();   // 筛选/排序/翻页重建表体，别把填到一半的新书行弄丢
 }
 
 function paintRow(b) {
@@ -601,6 +605,7 @@ async function inlineEdit(el) {
   const field = el.dataset.field;
   let v;
   if (field === "status") v = el.value;
+  else if (field === "title") v = el.value.trim();           // 只有新书行有书名输入框
   else if (field === "read_at") {
     const s = el.value.trim().replace(/[\/\s.]/g, "-");      // 宽容：2024/03/05 也收，统一成 yyyy-mm-dd
     if (!s) v = null;                                        // 清空 = 没读
@@ -608,6 +613,11 @@ async function inlineEdit(el) {
     else { el.value = s; v = toNotion(s); }                  // 存库仍为 Notion 串
   }
   else v = numOrNull(el.value);
+  if (id === "-1") {                                         // 未落库的新书行：只回写草稿
+    draft[field] = v;
+    el.classList.toggle("has", !!v);
+    return;
+  }
   try {
     const fresh = await api(`/api/books/${id}`, { method: "PUT", body: JSON.stringify({ [field]: v }) });
     const b = rowItems.get(+id);
@@ -643,7 +653,7 @@ function positionPop(el, anchor) {
 function openDimEditor(btn) {
   if (popClosed.anchor === btn && Date.now() - popClosed.at < 300) return;  // 外点关闭后紧跟的 click 不重开
   closePop();
-  const b = rowItems.get(+btn.dataset.id);
+  const b = btn.dataset.id === "-1" ? draft : rowItems.get(+btn.dataset.id);
   if (!b) return;
   const el = document.createElement("div");
   el.className = "pop";
@@ -654,7 +664,9 @@ function openDimEditor(btn) {
   pop = {
     el, anchor: btn,
     outside: ev => { if (!el.contains(ev.target)) closePop(); },
-    onScroll: closePop,
+    // 只关「弹层外」的滚动：列表自身可滚（overflow-y:auto），若把它的 scroll
+    // 事件也当外滚处理，滚轮一碰弹层就消失、滚动条点了等于没点
+    onScroll: ev => { if (!el.contains(ev.target)) closePop(); },
   };
   positionPop(el, btn);
   addEventListener("scroll", pop.onScroll, true);
@@ -719,6 +731,12 @@ function renderNationality(el, b) {
   });
 }
 async function commitNat(b, map) {
+  if (b.id === -1) {
+    draft.author_nationalities = map;
+    draft.nationalities = [...new Set(Object.values(map).filter(Boolean))];
+    showNewRow();
+    return;
+  }
   try {
     const fresh = await api(`/api/books/${b.id}/author-nationalities`,
       { method: "PUT", body: JSON.stringify({ nationalities: map }) });
@@ -739,6 +757,11 @@ function renderSingle(el, b, dim) {
   });
 }
 async function commitDim(b, dim, value) {
+  if (b.id === -1) {                                         // 新书行草稿：回写草稿重绘，不碰库
+    draft[dim] = value;
+    showNewRow();
+    return;
+  }
   try {
     const fresh = await api(`/api/books/${b.id}`, { method: "PUT", body: JSON.stringify({ [dim]: value }) });
     Object.assign(b, { [dim]: value }, { nationalities: fresh.nationalities });  // 作者变了国籍跟着动
@@ -754,13 +777,12 @@ const BOOK_FIELDS = `
   <label>平台<select name="platform"></select></label>
   <label>ISBN<input name="isbn"></label>
   <label>豆瓣编号（subject 号，可空）<input name="douban_id" pattern="[0-9]*" title="只填数字"></label>
-  <label>价格（正=亏 负=赚，空=无）<input name="price" type="number" step="0.01"></label>
+  <label>价格（正=支出 负=收入，空=无）<input name="price" type="number" step="0.01"></label>
   <label>进度（100读完/0未读/-1售出）<input name="progress" type="number"></label>
   <label>评分（1-10）<input name="rating" type="number" min="1" max="10"></label>
   <label>重要度（0-1）<input name="importance" type="number" step="0.1" min="0" max="1"></label>
   <label>状态<select name="status">
     <option value="in_library">在库</option><option value="sold">已售</option></select></label>
-  <label>创建时间（如 April 27, 2024 11:32 AM，可空）<input name="created"></label>
   <label>阅读时间（可空；留空则聚合时按创建时间归年）<input name="read_at"></label>`;
 
 async function fillDimSelects(form) {
@@ -778,31 +800,118 @@ function formPayload(form) {
     douban_id: g("douban_id") || null,
     price: numOrNull(g("price")), progress: numOrNull(g("progress")), rating: numOrNull(g("rating")),
     importance: numOrNull(g("importance")), status: g("status") || "in_library",
-    created: g("created") || null, read_at: g("read_at") || null,
+    // created/last_modified 由服务端自动盖章：表单不提交，PUT 带上反而会把已有的 created 清空
+    read_at: g("read_at") || null,
   };
 }
 
-async function showBookForm() {
-  const box = $("#book-form");
-  box.classList.remove("hidden");
-  box.innerHTML = `<h2>新书</h2><form id="n-form">${BOOK_FIELDS}
-    <div class="row"><button class="primary" type="submit">保存</button>
-    <button type="button" id="n-cancel">取消</button></div></form>`;
-  const form = box.querySelector("#n-form");
-  await fillDimSelects(form);
-  $("#n-cancel").onclick = () => box.classList.add("hidden");
-  form.onsubmit = async e => {
-    e.preventDefault();
-    const payload = formPayload(form);
-    if (!payload.title) return toast("书名必填", true);
-    try {
-      await api("/api/books", { method: "POST", body: JSON.stringify(payload) });
-      box.classList.add("hidden");
-      toast("已添加");
-      await loadBooks();
-    } catch (err) { toast(err.message, true); }
+// ---------- 新书：插在现有书最上面一行，控件全部复用列表行（维度弹层/行内输入），
+// 不再往页面底部沉表单。草稿是单一真值，行只是它的投影。 ----------
+let draft = null;                     // 未保存的新书行；id=-1 与 rowItems 里的真实书区分
+
+const newDraft = () => ({ id: -1, title: "", authors: [], nationalities: [], author_nationalities: {},
+  categories: [], publishers: [], platform: null, price: null, progress: null,
+  status: "in_library", read_at: null,
+  isbn: "", douban_id: "", rating: "", importance: "" });
+
+function toggleNewRow() {
+  if (!draft) { draft = newDraft(); showNewRow(); }
+  const t = $("#n-title");
+  if (t) { t.focus(); t.scrollIntoView({ block: "nearest" }); }
+}
+
+function dropNewRow() {
+  draft = null;
+  document.querySelectorAll("#tbl tr.new-row").forEach(el => el.remove());
+}
+
+// 重绘/保存前把进行中的文本输入快照进草稿（含还没失焦的键入），不靠 blur 时机；
+// 弹层管的字段（作者/分类/出版社/平台/国籍）本来就只写草稿，天然不丢
+function syncInputsToDraft() {
+  const row = $("#tbl tr.new-row");
+  if (!row || !draft) return;
+  const g = s => { const el = row.querySelector(s); return el ? el.value.trim() : ""; };
+  draft.title = g("input[data-field='title']");
+  draft.price = numOrNull(g("input[data-field='price']"));
+  draft.progress = numOrNull(g("input[data-field='progress']"));
+  draft.status = g("select[data-field='status']") || "in_library";
+  const rt = g("input[data-field='read_at']").replace(/[/\s.]/g, "-");
+  draft.read_at = rt && isoDate(rt) ? toNotion(rt) : null;
+  const form = $("#n-form");   // 副行是另一个 tr，主行里查不到
+  if (form) {
+    draft.isbn = form.elements.isbn.value.trim();
+    draft.douban_id = form.elements.douban_id.value.trim();
+    draft.rating = form.elements.rating.value.trim();
+    draft.importance = form.elements.importance.value.trim();
+  }
+}
+
+// 幂等：先摘再插，始终钉在第一行（loadBooks 重建表体后也用它把行找回来）
+function showNewRow() {
+  const tb = $("#tbl tbody");
+  if (!tb) return;
+  syncInputsToDraft();   // 摘行前先快照，筛选/排序/翻页重建不丢已填的值
+  tb.querySelectorAll("tr.new-row").forEach(el => el.remove());
+  tb.insertAdjacentHTML("afterbegin", newBookRow());
+  $("#n-form").onsubmit = e => { e.preventDefault(); saveDraft(); };
+  $("#n-cancel").onclick = dropNewRow;
+  $("#n-title").addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); saveDraft(); }   // 书名框直接 Enter 保存
+  });
+}
+
+function newBookRow() {
+  const d = draft;
+  return `
+    <tr class="new-row" data-id="-1">
+      <td class="title"><input id="n-title" data-field="title" placeholder="书名（必填）"
+        value="${esc(d.title)}" autocomplete="off" aria-label="书名"></td>
+      ${dimBtn(d, "authors", (d.authors || []).join("、"))}
+      <td><button class="fill" data-id="-1" data-dim="nationality"
+        title="按作者设置国籍（作者跨书共享，改动全局生效）">${
+        (d.nationalities || []).join("、") ? esc(d.nationalities.join("、")) : '<span class="dull">＋ 添加</span>'}</button></td>
+      ${dimBtn(d, "categories", (d.categories || []).join("、"))}
+      ${dimBtn(d, "publishers", (d.publishers || []).join("、"))}
+      ${dimBtn(d, "platform", d.platform)}
+      <td><input class="inline" data-field="price" value="${d.price ?? ""}" placeholder="—" aria-label="价格"></td>
+      <td><input class="inline" data-field="progress" value="${d.progress ?? ""}" placeholder="—" aria-label="进度"></td>
+      <td><select class="inline st${d.status ? " has" : ""}" data-field="status" title="点击切换 在库 / 已售" aria-label="状态">
+        <option value="in_library" ${d.status === "in_library" ? "selected" : ""}>在库</option>
+        <option value="sold" ${d.status === "sold" ? "selected" : ""}>已售</select></td>
+      <td><input type="text" class="inline dt${d.read_at ? " has" : ""}" data-field="read_at"
+        value="${dateOf(d.read_at)}" aria-label="读完日期（yyyy-mm-dd，点击可选）" spellcheck="false"></td>
+    </tr>
+    <tr class="new-row sub"><td colspan="10"><form id="n-form" class="n-extra">
+      <label>ISBN<input name="isbn" value="${esc(d.isbn)}"></label>
+      <label>豆瓣编号<input name="douban_id" pattern="[0-9]*" title="只填数字" value="${esc(d.douban_id)}"></label>
+      <label>评分 1-10<input name="rating" type="number" min="1" max="10" value="${esc(d.rating)}"></label>
+      <label>重要度 0-1<input name="importance" type="number" step="0.1" min="0" max="1" value="${esc(d.importance)}"></label>
+      <span class="n-btns"><button class="primary" type="submit">保存</button>
+      <button type="button" id="n-cancel">取消</button></span>
+    </form></td></tr>`;
+}
+
+async function saveDraft() {
+  if (!draft) return;
+  const rawDt = $("#tbl tr.new-row input[data-field='read_at']").value.trim().replace(/[/\s.]/g, "-");
+  if (rawDt && !isoDate(rawDt)) return toast("日期按 yyyy-mm-dd 写，如 2024-03-05", true);
+  syncInputsToDraft();
+  const payload = {
+    title: draft.title, authors: draft.authors,
+    publishers: draft.publishers, categories: draft.categories, platform: draft.platform,
+    isbn: draft.isbn || null, douban_id: draft.douban_id || null,
+    price: draft.price, progress: draft.progress,
+    rating: numOrNull(draft.rating), importance: numOrNull(draft.importance),
+    status: draft.status, read_at: draft.read_at,
   };
-  box.scrollIntoView();
+  if (!payload.title) return toast("书名必填", true);
+  try {
+    await api("/api/books", { method: "POST", body: JSON.stringify(payload) });
+    dropNewRow();
+    FACETS = await api("/api/facets");   // 新添的作者/出版社/分类进候选池
+    toast("已添加");
+    await loadBooks();
+  } catch (err) { toast(err.message, true); }
 }
 
 // ---------- 详情 ----------
@@ -831,6 +940,7 @@ async function bookDetail(id) {
       <section class="panel meta">
         ${coverImg}
         <h2>${b.title}${dbk}${obs}${coverBtn}</h2>
+        <p class="muted" style="font-size:12px;margin:4px 0 10px">创建 ${esc(dateOf(b.created) || "—")} · 更新 ${esc(dateOf(b.last_modified) || "—")}</p>
         <form id="d-form">${BOOK_FIELDS}
           <div class="row"><button class="primary" type="submit">保存</button>
           <button class="danger" type="button" id="d-del">删除记录</button></div>
@@ -870,7 +980,6 @@ async function bookDetail(id) {
   el("rating").value = b.rating ?? "";
   el("importance").value = b.importance ?? "";
   el("status").value = b.status;
-  el("created").value = b.created || "";
   el("read_at").value = b.read_at || "";
   await fillDimSelects(form);
   form.onsubmit = async e => {

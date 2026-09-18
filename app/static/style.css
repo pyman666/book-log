@@ -11,8 +11,8 @@
   --series-1: #cc5533;        /* 赭红（主 accent） */
   --series-2: #7d9430;        /* 橄榄 */
   --series-5: #4a63a8;        /* 黛蓝 */
-  --div-pos: #c2452f;         /* 正价=亏 暖红 */
-  --div-neg: #2f8f6f;         /* 负价=赚 松绿 */
+  --div-pos: #c2452f;         /* 正价=支出 暖红 */
+  --div-neg: #2f8f6f;         /* 负价=收入 松绿 */
   /* 8-slot 分类色（口味光谱；固定顺序=段首现序；validator light 全过，
      #d18a1f 对比度 2.78:1 WARN 由 legend 文字名兜底） */
   --cat-1: #cc5533; --cat-2: #4a63a8; --cat-3: #7d9430; --cat-4: #c75d8b;
@@ -277,9 +277,17 @@ td input.dt.has { background-image: none; padding-right: 6px; }
 .md img { max-width: 100%; }
 .muted { color: var(--muted); }
 .hidden { display: none; }
-#book-form { margin-top: 12px; }
-#book-form label { display: block; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
-#book-form input, #book-form select { width: 100%; margin-top: 2px; }
+/* 新书行：插在现有书最上面，控件复用列表行（维度弹层/行内输入），不再往底部沉表单；
+   sub 行装列表列没有的四个字段 + 保存/取消 */
+#tbl tr.new-row { background: color-mix(in srgb, var(--series-1) 5%, transparent); }
+#tbl tr.new-row:hover { background: color-mix(in srgb, var(--series-1) 8%, transparent); }
+#tbl tr.new-row.sub td { background: var(--surface-1); border-bottom: 1px solid var(--axis); }
+#tbl tr.new-row input { width: 100%; box-sizing: border-box; }
+#tbl .n-extra { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; }
+#tbl .n-extra label { font-size: 12px; color: var(--muted); display: flex; align-items: center; gap: 6px; }
+#tbl .n-extra input { width: 108px; }
+#tbl .n-extra input[type="number"] { width: 72px; }
+#tbl .n-extra .n-btns { margin-left: auto; display: flex; gap: 8px; }
 #toast { display: none; position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
   background: var(--text-primary); color: var(--page); padding: 8px 16px; border-radius: 8px;
   font-size: 13px; max-width: 80vw; white-space: pre-wrap; z-index: 10; }

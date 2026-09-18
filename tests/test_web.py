@@ -44,3 +44,20 @@ def test_inline_editable_fields_exist_in_model():
     inline = set(re.findall(r'data-field="(\w+)"', js))
     assert inline, "书单页行内编辑控件没找到，是改版了还是选择器失效？"
     assert not inline - set(BookIn.model_fields) - {"nationalities"}
+
+
+def test_new_book_row_reuses_table_controls():
+    """登记新书 = 插到现有书最上面一行，控件复用列表行（维度弹层/行内输入）；
+    不许再往页面底部沉一个独立表单面板。"""
+    js = _js()
+    assert "book-form" not in js, "底部表单面板又回来了？新书行应该插在表格第一行"
+    block = re.search(r"function newBookRow\(\) \{.*?\n\}", js, re.S).group(0)
+    # 作者/分类/出版社/平台走跟列表行同一个 dimBtn 弹层，国籍按钮同 markup
+    dims = set(re.findall(r'dimBtn\(d,\s*"(\w+)"', block))
+    assert dims == {"authors", "categories", "publishers", "platform"}
+    assert 'data-dim="nationality"' in block
+    # 列表列没有的四个字段不能丢
+    for name in ("isbn", "douban_id", "rating", "importance"):
+        assert f'name="{name}"' in block, f"新书行漏了字段 {name}"
+    # 保存走 POST /api/books，取消/保存都有着落
+    assert 'api("/api/books", { method: "POST"' in js
