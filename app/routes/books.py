@@ -35,7 +35,7 @@ def create_book(payload: BookIn, request: Request):
     if not payload.title.strip():
         raise HTTPException(400, "书名必填")
     with conn_of(request) as conn:
-        return dbmod.save_book(conn, payload.model_dump())
+        return dbmod.insert_book(conn, payload.model_dump())
 
 
 @router.get("/api/books/{bid}")
@@ -78,6 +78,7 @@ def update_author_nationalities(payload: AuthorNatIn, request: Request, bid: int
                 continue
             conn.execute("UPDATE authors SET nationality = ? WHERE name = ?",
                          (nat.strip() or None, name))
+        conn.execute("UPDATE books SET last_modified = ? WHERE id = ?", (dbmod.now_notion(), bid))
         conn.commit()
         return dbmod.get_book(conn, bid)
 

@@ -2,6 +2,7 @@
 import re
 import sqlite3
 from contextlib import contextmanager
+from datetime import datetime
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, chinese INTEGER, nationality TEXT);
@@ -12,7 +13,7 @@ CREATE TABLE IF NOT EXISTS books (
   id INTEGER PRIMARY KEY,
   title TEXT NOT NULL,
   isbn TEXT,
-  price REAL,                 -- 花费-收入：正=净亏 负=净赚；NULL=无价格（不参与统计）
+  price REAL,                 -- 花费-收入：正=支出 负=收入；NULL=无价格（不参与统计）
   importance REAL,
   progress INTEGER,           -- 100读完 / 0未读 / -1售出
   rating INTEGER,             -- 1~10
@@ -78,6 +79,16 @@ def ts_key(s):
         h = int(m.group(4)) % 12 + (12 if m.group(6).upper() == "P" else 0)
         return f"{y:04d}-{mo:02d}-{d:02d} {h:02d}:{int(m.group(5)):02d}"
     return f"{y:04d}-{mo:02d}-{d:02d}"
+
+
+_MON_FULL = "January February March April May June July August September October November December".split(" ")
+
+
+def now_notion():
+    """当前时间 → 'September 17, 2026 4:20 PM'，与库内既有 Notion 串同构（ts_key 可解析）。"""
+    t = datetime.now()
+    return (f"{_MON_FULL[t.month - 1]} {t.day}, {t.year} "
+            f"{t.hour % 12 or 12}:{t.minute:02d} {'AM' if t.hour < 12 else 'PM'}")
 
 
 def read_time(alias: str = "") -> str:
@@ -198,10 +209,9 @@ def _apply(conn, bid, b):
 
 
 def save_book(conn, b):
-    """写一条书，返回 id。去重规则（无唯一约束，纯应用层）：
-    - created 非空：title+created+last_modified 相同 = 同一记录（沿用旧去重标准）；
-    - created 空（售出书等）：一律新增——同书名可能有多批次。
-    旧的“同名同步存根”填充规则已随 file_path 列一起消失：存根不再被创建，无需归并。"""
+    """导入/同步写一条书（幂等）：created 非空时按 title+created+last_modified 去重，
+    命中就更新（重跑导入不堆副本）；created 空（售出书等）一律新增。
+    网页新增不走这里——见 insert_book：那里绝不去重，同书名多批次是常态。"""
     title, created = b["title"], b.get("created")
     if created:
         row = conn.execute(
@@ -210,12 +220,24 @@ def save_book(conn, b):
         if row:
             _apply(conn, row["id"], b)
             return row["id"]
+    return _insert(conn, b)
+
+
+def insert_book(conn, b):
+    """网页「登记新书」专用：无条件新增，创建/更改时间由服务端盖章（客户端说了不算）。
+    不走去重：同书名不同批次（多次买卖）本来就是多条记录。"""
+    now = now_notion()
+    return _insert(conn, {**b, "created": b.get("created") or now, "last_modified": now})
+
+
+def _insert(conn, b):
+    """裸插入一行（不查重，不碰调用方给的时间戳）。"""
     cur = conn.execute(
         """INSERT INTO books (title, isbn, price, importance, progress, rating, status,
                               created, read_at, last_modified, douban_id, platform_id)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (title, b.get("isbn"), b.get("price"), b.get("importance"), b.get("progress"),
-         b.get("rating"), b.get("status") or "in_library", created, b.get("read_at"),
+        (b["title"], b.get("isbn"), b.get("price"), b.get("importance"), b.get("progress"),
+         b.get("rating"), b.get("status") or "in_library", b.get("created"), b.get("read_at"),
          b.get("last_modified"), b.get("douban_id") or None,
          _dim(conn, "platforms", b.get("platform"))))
     bid = cur.lastrowid
@@ -253,13 +275,15 @@ def get_book(conn, bid):
 
 
 def update_book(conn, bid, fields):
-    """按 id 部分更新：只更新 fields 里的键（含 None = 显式清空）。title 不可改。"""
+    """按 id 部分更新：只更新 fields 里的键（含 None = 显式清空）。title 不可改。
+    last_modified 服务端盖：任何一次编辑都刷新，客户端传什么都不算。"""
     fields = {k: v for k, v in fields.items() if k != "title"}
     row = conn.execute(_SELECT_NAMES + " WHERE b.id = ?", (bid,)).fetchone()
     if not row:
         return None
     b = _shape(conn, row)
     b.update(fields)
+    b["last_modified"] = now_notion()
     _apply(conn, bid, b)
     return get_book(conn, bid)
 
@@ -301,7 +325,10 @@ def list_books(conn, q=None, category=None, author=None, publisher=None, platfor
         args.append(category)
     base = f" FROM books b LEFT JOIN platforms f ON f.id = b.platform_id WHERE {' AND '.join(where)}"
     total = conn.execute(f"SELECT COUNT(*){base}", args).fetchone()[0]
-    order = f"{_SORTABLE.get(sort, 'b.id')} {'DESC' if desc else 'ASC'}, b.id"
+    # 副键必须跟主键同向：日期列的值可能整组为 NULL（已售书 created 全空），
+    # 此时副键就是实际排序键——固定 ASC 会把「降序」翻成 id 升序（越老越前）
+    direction = "DESC" if desc else "ASC"
+    order = f"{_SORTABLE.get(sort, 'b.id')} {direction}, b.id {direction}"
     rows = conn.execute(
         f"SELECT b.*, f.name AS platform{base} "
         f"ORDER BY {order} LIMIT ? OFFSET ?", args + [page_size, (page - 1) * page_size]).fetchall()

@@ -1,6 +1,7 @@
 import pytest
 from fastapi.testclient import TestClient
 
+from app import db as dbmod
 from app.main import create_app
 
 
@@ -139,7 +140,8 @@ def test_list_nationality_filter(client):
     from app import db as dbmod
     client.post("/api/books", json={"title": "甲", "authors": ["余华"],
                                     "created": "April 27, 2024 11:32 AM"})
-    client.post("/api/books", json={"title": "乙", "authors": ["加缪"]})
+    client.post("/api/books", json={"title": "乙", "authors": ["加缪"],
+                                    "created": "May 2, 2023 9:00 AM"})
     with dbmod.db_conn(client.app.state.db_path) as c:
         c.execute("UPDATE authors SET nationality='中国' WHERE name='余华'")
         c.execute("UPDATE authors SET nationality='法国' WHERE name='加缪'")
@@ -149,7 +151,7 @@ def test_list_nationality_filter(client):
     assert d["items"][0]["nationalities"] == ["中国"]   # _shape 带出国籍
     f = client.get("/api/facets").json()
     assert f["nationalities"] == ["中国", "法国"]
-    assert f["years"] == [2024]                          # 年度筛选选项
+    assert f["years"] == [2024, 2023]                    # 年度筛选选项（按 created 降序）
     assert client.get("/api/books", params={"year": 2024}).json()["total"] == 1
 
 
@@ -292,3 +294,33 @@ def test_wall_endpoint(client, monkeypatch):
     assert [i["id"] for i in w["items"]] == [b1]             # items 只含磁盘有文件的
     assert set(w["items"][0]) == {"id", "title", "read_at", "rating", "isbn"}
     assert w["items"][0]["isbn"] == "9781"
+
+
+def test_timestamps_are_server_stamped(client):
+    """创建/更改时间由服务端自动写：新增补 created，编辑刷新 last_modified，两者都不吃客户端。"""
+    bid = client.post("/api/books", json={"title": "无日期新书"}).json()
+    b = client.get(f"/api/books/{bid}").json()
+    assert b["created"] and b["last_modified"]            # 没填也有值
+    assert dbmod.ts_key(b["created"]) and dbmod.ts_key(b["last_modified"])   # 格式可解析
+    first = b["last_modified"]
+
+    client.put(f"/api/books/{bid}", json={"rating": 8, "last_modified": "January 1, 2000 1:00 AM"})
+    b2 = client.get(f"/api/books/{bid}").json()
+    assert b2["created"] == b["created"]                  # 编辑不动创建时间
+    assert b2["last_modified"] != "January 1, 2000 1:00 AM"   # 客户端给的更改时间被服务端覆盖
+
+    keep = client.post("/api/books", json={
+        "title": "导入带购入日", "created": "June 1, 2024 8:00 AM"}).json()
+    assert client.get(f"/api/books/{keep}").json()["created"] == "June 1, 2024 8:00 AM"
+
+
+def test_sold_list_desc_stays_descending(client):
+    """已售书 created 全空：主键整组相同，副键必须跟主键同向，否则「降序」会翻成 id 升序。"""
+    ids = [client.post("/api/books", json={"title": f"卖{i}", "status": "sold"}).json()
+           for i in range(3)]
+    titles = [x["title"] for x in client.get(
+        "/api/books", params={"status": "sold", "sort": "created", "desc": "true"}).json()["items"]]
+    assert titles == [f"卖{i}" for i in (2, 1, 0)]        # 新登记的在前（id 降序）
+    assert [x["title"] for x in client.get(
+        "/api/books", params={"status": "sold", "sort": "created", "desc": "false"}).json()["items"]] \
+        == [f"卖{i}" for i in (0, 1, 2)]

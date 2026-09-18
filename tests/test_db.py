@@ -148,7 +148,7 @@ def test_update_partial(tmp_path):
 
 
 def test_summary_nulls(tmp_path):
-    """NULL 价格不参与金额；正=亏损 负=净赚。"""
+    """NULL 价格不参与金额；正=支出 负=收入。"""
     conn = make(tmp_path)
     save_book(conn, B(title="a", price=5.0, rating=8))
     save_book(conn, B(title="b", price=-2.0))
@@ -200,3 +200,25 @@ def test_multi_author_no_double_count(tmp_path):
     assert da["甲"]["value"] == 3.0
     assert da["乙"]["value"] == 3.0
     assert stats_group(conn, "author", "count")[0]["value"] == 1
+
+
+def test_insert_book_stamps_time_and_never_dedupes(tmp_path):
+    """网页新增：创建/更改时间自动盖；同名同分钟也是两条（同书名多批次不合并）。"""
+    conn = make(tmp_path)
+    b1 = dbmod.insert_book(conn, B(title="父与子", authors=["屠格涅夫"]))
+    b2 = dbmod.insert_book(conn, B(title="父与子", authors=["卜劳恩"]))
+    assert b1 != b2 and conn.execute("SELECT COUNT(*) FROM books").fetchone()[0] == 2
+    r1, r2 = get_book(conn, b1), get_book(conn, b2)
+    assert r1["created"] and r1["last_modified"]        # 没填也盖章
+    assert dbmod.ts_key(r1["created"]) is not None      # 格式能被 ts_key 解析
+    assert r1["created"] == r2["created"]               # 同一分钟：时间戳相同也好，行是两行
+
+
+def test_save_book_still_idempotent_for_import(tmp_path):
+    """导入路径不变：created 带值 + last_modified 相同 = 同一条，重跑不堆副本。"""
+    conn = make(tmp_path)
+    b = B(title="导入书", created="April 1, 2024 10:00 AM", last_modified="May 2, 2024 9:00 AM")
+    first = save_book(conn, b)
+    assert save_book(conn, {**b, "price": 9.9}) == first
+    assert conn.execute("SELECT COUNT(*) FROM books").fetchone()[0] == 1
+    assert get_book(conn, first)["price"] == 9.9
