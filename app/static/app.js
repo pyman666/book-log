@@ -34,15 +34,29 @@ function toast(msg, isErr, wide) {
   t._timer = setTimeout(() => (t.style.display = "none"), wide ? 10000 : 3500);
 }
 
+// 圆角浮层提示：暖纸底 + 细描边 + 软投影，替代 echarts 默认黑框
+const tip = () => ({
+  backgroundColor: cssVar("--panel"),
+  borderColor: cssVar("--border"),
+  borderWidth: 1,
+  padding: [8, 12],
+  textStyle: { color: cssVar("--text-primary"), fontSize: 12 },
+  extraCssText: "border-radius:10px;box-shadow:0 8px 24px rgba(40,25,10,.16);backdrop-filter:blur(6px);",
+});
+// 横向渐变：淡→实心，给柱条一点体积感（c 为 6 位 hex）
+const gradX = c => ({ type: "linear", x: 0, y: 0, x2: 1, y2: 0,
+  colorStops: [{ offset: 0, color: c + "b8" }, { offset: 1, color: c }] });
+
 const baseOption = () => ({
   backgroundColor: "transparent",
   textStyle: { color: cssVar("--text-secondary"),
     fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif" },
   grid: { left: 8, right: 24, top: 16, bottom: 8, containLabel: true },
-  tooltip: {},
-  xAxis: { axisLine: { lineStyle: { color: cssVar("--axis") } },
+  tooltip: tip(),
+  xAxis: { axisLine: { show: false }, axisTick: { show: false },
     axisLabel: { color: cssVar("--muted") }, splitLine: { show: false } },
-  yAxis: { axisLine: { show: false }, axisLabel: { color: cssVar("--muted") },
+  yAxis: { axisLine: { show: false }, axisTick: { show: false },
+    axisLabel: { color: cssVar("--muted") },
     splitLine: { lineStyle: { color: cssVar("--grid") } } },
 });
 
@@ -108,7 +122,7 @@ async function panelHeatmap() {
     const pts = Object.entries(daily).filter(([d]) => d.startsWith(y))
       .map(([d, v]) => [d, v.n, v.titles]);
     c.setOption({
-      tooltip: { formatter: p => `${p.value[0]} · ${p.value[1]} 本<br>${p.value[2].join("、")}` },
+      tooltip: { ...tip(), formatter: p => `${p.value[0]} · ${p.value[1]} 本<br>${p.value[2].join("、")}` },
       visualMap: { min: 1, max: Math.max(3, ...pts.map(p => p[1])), show: false,
         dimension: 1,  // 数据是 [date, n, titles]，显式指向 n——否则拿 titles 排序，全落色带外→格不填色
         inRange: { color: ["--heat-1", "--heat-2", "--heat-3", "--heat-4"].map(cssVar) } },
@@ -151,7 +165,7 @@ async function panelCurve() {
       textStyle: { color: cssVar("--text-secondary"),
         fontFamily: "system-ui, -apple-system, 'Segoe UI', sans-serif" },
       grid: { left: 8, right: 24, top: 20, bottom: 8, containLabel: true },
-      tooltip: { trigger: "axis",
+      tooltip: { ...tip(), trigger: "axis",
         formatter: ps => { const r = ps[0].data[2];
           return `${label(r.period, g)} · ${r.n} 本<br>${r.titles.join("、")}`; } },
       xAxis: { type: "time", axisLine: { lineStyle: { color: cssVar("--axis") } },
@@ -159,8 +173,10 @@ async function panelCurve() {
       yAxis: { type: "value", minInterval: 1, axisLine: { show: false },
         axisLabel: { color: cssVar("--muted") }, splitLine: { lineStyle: { color: cssVar("--grid") } } },
       series: [{
-        type: "line", data: pts, smooth: true, symbol: "circle", symbolSize: 6,
-        lineStyle: { color: area, width: 2 }, itemStyle: { color: area },
+        type: "line", data: pts, smooth: true, symbol: "circle", symbolSize: 7,
+        lineStyle: { color: area, width: 2.5, cap: "round", join: "round" },
+        itemStyle: { color: area, borderColor: cssVar("--panel"), borderWidth: 2 },
+        emphasis: { scale: 1.4 },
         areaStyle: { color: {
           type: "linear", x: 0, y: 0, x2: 0, y2: 1,
           colorStops: [{ offset: 0, color: area + "55" }, { offset: 1, color: area + "00" }] } },
@@ -189,12 +205,18 @@ function drawSpectrum(axes) {
   if (old) { old.dispose(); charts.splice(charts.indexOf(old), 1); }
   const keys = [...new Set(axes.flatMap(a => a.segments.map(s => s.key)))];
   const totals = axes.map(a => a.segments.reduce((s, x) => s + x.value, 0));
+  const val = (a, k) => (a.segments.find(s => s.key === k) || { value: 0 }).value;
+  const present = axes.map(a => keys.filter(k => val(a, k) > 0));   // 每行有值的段序（定圆角端）
+  const R = 7;
+  const cap = (j, k) => [                       // borderRadius 顺序：左上 右上 右下 左下
+    present[j][0] === k ? R : 0, present[j][present[j].length - 1] === k ? R : 0,
+    present[j][present[j].length - 1] === k ? R : 0, present[j][0] === k ? R : 0];
   const c = baseChart(el);
   c.setOption({
     color: keys.map((_, i) => cssVar(CAT[i % CAT.length])),
     legend: { bottom: 0, itemWidth: 12, itemHeight: 8, textStyle: { color: cssVar("--muted") } },
     grid: { left: 8, right: 40, top: 12, bottom: 40, containLabel: true },
-    tooltip: { trigger: "axis", axisPointer: { type: "none" },
+    tooltip: { ...tip(), trigger: "axis", axisPointer: { type: "none" },
       formatter: ps => ps.filter(p => p.value > 0 && p.seriesName)   // 排除末端的无名总数 bar
         .map(p => `${p.marker}${p.seriesName}: ${Math.round(p.value)}`).join("<br>") },
     xAxis: { type: "value", max: v => Math.ceil(v.max * 1.18) },
@@ -202,21 +224,22 @@ function drawSpectrum(axes) {
       axisLabel: { color: cssVar("--text-secondary") } },
     series: [
       ...keys.map(k => ({
-        name: k, type: "bar", stack: "s", barWidth: 26,
-        data: axes.map(a => (a.segments.find(s => s.key === k) || { value: 0 }).value),
-        itemStyle: { borderRadius: 3 } })),
+        name: k, type: "bar", stack: "s", barWidth: 20, barCategoryGap: "40%",
+        data: axes.map((a, j) => ({ value: val(a, k),
+          itemStyle: { borderRadius: cap(j, k) } })),
+        itemStyle: { borderColor: cssVar("--panel"), borderWidth: 1 } })),
       // 选择性直标：只在每条 bar 末端标总数，分段精确值交给 tooltip
       { type: "bar", stack: "s-total", barWidth: 1, silent: true, tooltip: { show: false },
         data: totals, itemStyle: { color: "transparent" },
         label: { show: true, position: "right", color: cssVar("--text-secondary"),
-          formatter: p => Math.round(p.value) } },
+          fontWeight: 600, formatter: p => Math.round(p.value) } },
     ],
   });
 }
 
 // ---------- 分布（单图动态切换：维度 × 指标；点柱条跳书单筛选） ----------
 const DIST = { by: "author", agg: "count", top: 12 };
-const DIST_BY = [["nationality", "作者国籍"], ["author", "作者"], ["publisher", "出版社"],
+const DIST_BY = [["nationality", "国籍"], ["author", "作者"], ["publisher", "出版社"],
                  ["category", "类别"], ["platform", "平台"], ["year", "年度"]];
 const DIST_AGG = [["count", "本数"], ["sum_price", "金额"]];
 let distChart = null;
@@ -266,18 +289,23 @@ async function drawDist() {
   const isMoney = DIST.agg === "sum_price";
   $("#dist-hint").textContent = (isMoney ? "元，红=支出 绿=收入" : "本数") +
     (DIST.by === "year" ? " · 全部年份" : " · Top 12");
+  const R = 9;
+  const moneyPos = cssVar("--div-pos"), moneyNeg = cssVar("--div-neg"), base = cssVar("--series-1");
   distChart.setOption({
-    tooltip: { trigger: "axis", axisPointer: { type: "shadow" },
+    grid: { left: 8, right: 52, top: 6, bottom: 6, containLabel: true },
+    tooltip: { ...tip(), trigger: "axis",
+      axisPointer: { type: "shadow", shadowStyle: { color: cssVar("--surface-1") } },
       valueFormatter: v => isMoney ? `${v} 元 · ${v >= 0 ? "支出" : "收入"}` : `${v} 本` },
-    xAxis: { type: "value" },
+    xAxis: { type: "value", show: false },
     yAxis: { type: "category", data: [...rows].reverse().map(x => x.key),
       axisLabel: { color: cssVar("--text-secondary") } },
-    series: [{ type: "bar", barMaxWidth: 16,
+    series: [{ type: "bar", barMaxWidth: 18, barCategoryGap: "44%",
+      showBackground: true,
+      backgroundStyle: { color: cssVar("--grid"), borderRadius: R },
       data: [...rows].reverse().map(x => ({ value: x.value,
-        itemStyle: { borderRadius: 3,
-          color: isMoney ? (x.value >= 0 ? cssVar("--div-pos") : cssVar("--div-neg"))
-                         : cssVar("--series-1") } })),
-      label: { show: true, position: "right", color: cssVar("--text-secondary"),
+        itemStyle: { borderRadius: R,
+          color: isMoney ? gradX(x.value >= 0 ? moneyPos : moneyNeg) : gradX(base) } })),
+      label: { show: true, position: "right", color: cssVar("--text-secondary"), fontWeight: 600,
         formatter: p => isMoney ? Math.round(p.value * 100) / 100 : p.value } }],
   });
 }
@@ -289,7 +317,7 @@ async function panelQuadrant() {
   const c = baseChart($("#ch-quadrant"));
   c.setOption({
     grid: { left: 8, right: 30, top: 30, bottom: 24, containLabel: true },
-    tooltip: { confine: true,
+    tooltip: { ...tip(), confine: true,
       formatter: p => `${p.data.title}\n评分 ${p.data.value[0]} · 重要度 ${p.data.value[1]}` +
         (p.data.price != null ? `\n${p.data.price >= 0 ? "支出" : "收入"} ¥${Math.abs(p.data.price).toFixed(2)}` : "\n无价格") },
     xAxis: { type: "value", min: 1, max: 10, name: "评分", nameLocation: "middle", nameGap: 26,
@@ -300,11 +328,11 @@ async function panelQuadrant() {
       data: pts.map(p => ({ title: p.title, id: p.id, price: p.price,
         value: [p.rating, p.importance],
         symbolSize: 12 + Math.sqrt(Math.abs(p.price || 0)) * 1.5,
-        itemStyle: { opacity: .75,
+        itemStyle: { opacity: .82, borderColor: cssVar("--panel"), borderWidth: 2,
           // 无价格 = 中性灰（不读作亏损）；负=收入 蓝；正=支出 红
           color: p.price == null ? cssVar("--muted")
             : p.price < 0 ? cssVar("--div-neg") : cssVar("--div-pos") } })),
-      emphasis: { scale: 1.25 },
+      emphasis: { scale: 1.35, itemStyle: { opacity: 1, shadowBlur: 10, shadowColor: "rgba(40,25,10,.25)" } },
       markLine: ar == null ? undefined : { silent: true, symbol: "none",
         label: { color: cssVar("--muted"), fontSize: 10 },
         lineStyle: { type: "dashed", color: cssVar("--axis") },
@@ -767,6 +795,9 @@ function renderSingle(el, b, dim) {
 async function commitDim(b, dim, value) {
   if (b.id === -1) {                                         // 新书行草稿：回写草稿重绘，不碰库
     draft[dim] = value;
+    if (dim === "authors")                                   // 选中老作者顺带带出库里国籍，国籍列自动回显
+      Object.assign(draft, syncDraftAuthors(value, draft.author_nationalities,
+                                            (FACETS || {}).author_nationalities || {}));
     showNewRow();
     return;
   }
@@ -791,7 +822,7 @@ const BOOK_FIELDS = `
   <label>重要度（0-1）<input name="importance" type="number" step="0.1" min="0" max="1"></label>
   <label>状态<select name="status">
     <option value="in_library">在库</option><option value="sold">已售</option></select></label>
-  <label>阅读时间（可空；留空则聚合时按创建时间归年）<input name="read_at"></label>`;
+  <label>阅读时间（可空；留空则聚合时按创建时间归年）<input name="read_at" type="date"></label>`;
 
 // 平台下拉的选项是异步填的：先赋值不生效（选项还没进 select，.value 恒为 ""），
 // 保存时提交 null 反而把刚在书单页选的平台清掉。所以值必须在本函数里
@@ -815,7 +846,8 @@ function formPayload(form) {
     price: numOrNull(g("price")), progress: numOrNull(g("progress")), rating: numOrNull(g("rating")),
     importance: numOrNull(g("importance")), status: g("status") || "in_library",
     // created/last_modified 由服务端自动盖章：表单不提交，PUT 带上反而会把已有的 created 清空
-    read_at: g("read_at") || null,
+    // 库内 read_at 存 Notion 串（ts_key 按它排序/聚合）；日期输入框只产 ISO，提交前转回
+    read_at: g("read_at") ? toNotion(g("read_at")) : null,
   };
 }
 
@@ -827,6 +859,15 @@ const newDraft = () => ({ id: -1, title: "", authors: [], nationalities: [], aut
   categories: [], publishers: [], platform: null, price: null, progress: null,
   status: "in_library", read_at: null,
   isbn: "", douban_id: "", rating: "", importance: "" });
+
+// 作者变动后同步国籍草稿：草稿里手填过的（含显式清空）保留，新加的老作者带上库里国籍，
+// 删掉的作者出账
+function syncDraftAuthors(authors, prev, known) {
+  const map = {};
+  for (const n of authors) map[n] = (n in prev) ? prev[n] : (known[n] || "");
+  return { author_nationalities: map,
+           nationalities: [...new Set(Object.values(map).filter(Boolean))] };
+}
 
 function toggleNewRow() {
   if (!draft) { draft = newDraft(); showNewRow(); }
@@ -920,10 +961,21 @@ async function saveDraft() {
   };
   if (!payload.title) return toast("书名必填", true);
   try {
-    await api("/api/books", { method: "POST", body: JSON.stringify(payload) });
+    const newId = await api("/api/books", { method: "POST", body: JSON.stringify(payload) });
+    // 草稿里手填过且与库不同的国籍（新作者库里本就没有）走列表行的国籍接口补写；
+    // 与库一致的不重发——作者行跨书共享，别白刷一遍 last_modified
+    const known = (FACETS || {}).author_nationalities || {};
+    const natPatch = Object.fromEntries(Object.entries(draft.author_nationalities)
+      .filter(([n, v]) => v && v !== (known[n] || "")));
+    let natFail = false;
+    if (Object.keys(natPatch).length) {
+      try { await api(`/api/books/${newId}/author-nationalities`,
+                      { method: "PUT", body: JSON.stringify({ nationalities: natPatch }) }); }
+      catch { natFail = true; }
+    }
     dropNewRow();
-    FACETS = await api("/api/facets");   // 新添的作者/出版社/分类进候选池
-    toast("已添加");
+    FACETS = await api("/api/facets");   // 新添的作者/出版社/分类进候选池（含新作者国籍）
+    toast(natFail ? "已添加，但作者国籍没存上——在列表行点国籍列补一笔" : "已添加", natFail);
     await loadBooks();
   } catch (err) { toast(err.message, true); }
 }
@@ -993,7 +1045,7 @@ async function bookDetail(id) {
   el("rating").value = b.rating ?? "";
   el("importance").value = b.importance ?? "";
   el("status").value = b.status;
-  el("read_at").value = b.read_at || "";
+  el("read_at").value = dateOf(b.read_at);   // Notion 串 → ISO，date 输入框才能识别并弹出日历
   await fillDimSelects(form, b.platform || "");
   form.onsubmit = async e => {
     e.preventDefault();

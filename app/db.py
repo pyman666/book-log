@@ -354,12 +354,17 @@ def facets(conn):
         "SELECT DISTINCT a.nationality FROM authors a JOIN book_authors ba ON ba.author_id=a.id "
         "WHERE a.nationality IS NOT NULL AND a.nationality != '' AND a.nationality != '未知' "
         "ORDER BY a.nationality")]
+    # 作者→国籍映射（同口径排除空与「未知」占位）：书单页新书行填老作者时顺带带出国籍，
+    # 没国籍的（新作者）留空手填，不用再去国籍列挨个点
+    author_nat = {r[0]: r[1] for r in conn.execute(
+        "SELECT a.name, a.nationality FROM authors a JOIN book_authors ba ON ba.author_id=a.id "
+        "WHERE a.nationality IS NOT NULL AND a.nationality != '' AND a.nationality != '未知'")}
     years = [r[0] for r in conn.execute(
         f"SELECT DISTINCT year_of({read_time()}) FROM books "
         f"WHERE year_of({read_time()}) IS NOT NULL ORDER BY 1 DESC")]
     return {"categories": categories, "platforms": platforms,
             "authors": authors, "publishers": publishers,
-            "nationalities": nats, "years": years}
+            "nationalities": nats, "author_nationalities": author_nat, "years": years}
 def stats_summary(conn):
     r = conn.execute(
         """SELECT SUM(status = 'in_library') AS in_lib,
