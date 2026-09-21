@@ -255,10 +255,6 @@ td input.dt.has { background-image: none; padding-right: 6px; }
 .pop-item.on span { color: var(--series-1); font-weight: 600; }
 .pop-item input { accent-color: var(--series-1); margin: 0; }
 .pop-item span { overflow: hidden; text-overflow: ellipsis; }
-.pop-row { display: flex; gap: 8px; align-items: center; padding: 5px 8px; }
-.pop-row .pop-name { flex: 0 1 auto; max-width: 52%; overflow: hidden; text-overflow: ellipsis;
-  white-space: nowrap; font-size: 13px; }
-.pop-row select { flex: 1 1 auto; min-width: 0; }
 .pop-empty { padding: 6px 8px; color: var(--muted); }
 
 /* ---------- 详情 ---------- */

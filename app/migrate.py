@@ -41,6 +41,22 @@ def collect():
     return books, sold, errors
 
 
+def _sold_dup(conn, b):
+    """同书名/价/ISBN 的售出书：平台集合有交集（或都无平台）才算同批次。"""
+    title, price, isbn = b["title"], b["price"], b["isbn"]
+    cands = conn.execute(
+        "SELECT id FROM books WHERE status = 'sold' AND title = ? AND price IS ? AND isbn IS ?",
+        (title, price, isbn)).fetchall()
+    plats = set(b.get("platforms") or [])
+    for c in cands:
+        have = {r[0] for r in conn.execute(
+            "SELECT p.name FROM book_platforms bp JOIN platforms p ON p.id = bp.platform_id "
+            "WHERE bp.book_id = ?", (c["id"],))}
+        if (have & plats) if plats else not have:
+            return c
+    return None
+
+
 def run(dry_run=False, force=False):
     books, sold, errors = collect()
     report = {
@@ -62,11 +78,7 @@ def run(dry_run=False, force=False):
         for b in books:
             dbmod.save_book(conn, b)
         for b in sold:
-            dup = conn.execute(
-                """SELECT 1 FROM books b LEFT JOIN platforms f ON f.id = b.platform_id
-                   WHERE b.status = 'sold' AND b.title = ? AND b.price IS ?
-                   AND b.isbn IS ? AND f.name IS ?""",
-                (b["title"], b["price"], b["isbn"], b["platform"])).fetchone()
+            dup = _sold_dup(conn, b)
             if not dup:
                 dbmod.save_book(conn, b)
     for f in sorted(BOOKS_DIR.glob("*.md")):

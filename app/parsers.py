@@ -79,7 +79,7 @@ def parse_book(text, default_status="in_library"):
         "authors": strip_wiki(_as_list(meta.get("author"))) or [],
         "publishers": strip_wiki(_as_list(meta.get("publisher"))) or [],
         "categories": strip_wiki(_as_list(meta.get("category"))) or [],
-        "platform": strip_wiki(meta.get("platform")),
+        "platforms": strip_wiki(_as_list(meta.get("platform"))) or [],
     }
 
 
@@ -111,6 +111,6 @@ def parse_sold_table(text):
             "authors": strip_wiki(_as_list(get(4))) or [],
             "publishers": WIKILINK_RE.findall(get(5)) or [],
             "category": None,
-            "platform": strip_wiki(get(3)),
+            "platforms": strip_wiki(_as_list(get(3))) or [],
         })
     return books

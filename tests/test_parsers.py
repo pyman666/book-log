@@ -54,7 +54,7 @@ def test_parse_book_full():
     assert b["authors"] == ["托尔斯泰"]
     assert b["publishers"] == ["上海文艺出版社", "凤凰壹力"]
     assert b["categories"] == ["长篇"]
-    assert b["platform"] == "京东"
+    assert b["platforms"] == ["京东"]
     assert b["price"] == 1.83
     assert b["importance"] == 1.0
     assert b["progress"] == 100
@@ -95,7 +95,7 @@ def test_parse_sold_table():
     assert r0["progress"] == -1
     assert r0["authors"] == ["茨威格"]
     assert r0["publishers"] == ["时代文艺出版社", "科文图书"]   # 一格两个 wikilink
-    assert r0["platform"] == "淘宝"
+    assert r0["platforms"] == ["淘宝"]
     assert r0["created"] is None
     assert r1["price"] == 0.0                  # 显式 -0.00 = 真持平
     assert r1["publishers"] == []              # — 占位 → 空

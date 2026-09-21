@@ -12,7 +12,7 @@ def make(tmp_path):
 def B(title="测试", **kw):
     b = {"title": title, "isbn": None, "price": None, "importance": None, "progress": None,
          "rating": None, "status": "in_library", "created": None, "read_at": None,
-         "last_modified": None, "authors": [], "publishers": [], "categories": [], "platform": None}
+         "last_modified": None, "authors": [], "publishers": [], "categories": [], "platforms": []}
     b.update(kw)
     return b
 
@@ -26,6 +26,20 @@ def test_legacy_file_path_column_is_dropped(tmp_path):
     init_db(conn)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(books)")}
     assert "file_path" not in cols
+
+
+def test_legacy_platform_id_migrated_to_m2m(tmp_path):
+    """平台 1:1 → 多对多：旧 platform_id 列的数据搬进 book_platforms，然后删列。"""
+    conn = make(tmp_path)
+    conn.execute("INSERT INTO platforms (name) VALUES ('京东')")
+    conn.execute("ALTER TABLE books ADD COLUMN platform_id INTEGER")
+    bid = save_book(conn, B(title="老书"))
+    conn.execute("UPDATE books SET platform_id = 1 WHERE id = ?", (bid,))
+    conn.commit()
+    init_db(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(books)")}
+    assert "platform_id" not in cols
+    assert get_book(conn, bid)["platforms"] == ["京东"]
 
 
 def test_read_at_has_no_default(tmp_path):

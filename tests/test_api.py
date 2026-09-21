@@ -80,7 +80,7 @@ def test_content_ignores_client_sent_path(client, tmp_path):
 
 def test_facets(client):
     client.post("/api/books", json={"title": "甲", "authors": ["张"],
-                                    "categories": ["科幻"], "platform": "京东"})
+                                    "categories": ["科幻"], "platforms": ["京东"]})
     f = client.get("/api/facets").json()
     assert f["categories"] == ["科幻"] and f["authors"] == ["张"]
     assert f["platforms"] == ["京东"] and f["publishers"] == []

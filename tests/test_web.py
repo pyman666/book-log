@@ -55,25 +55,15 @@ def test_new_book_row_reuses_table_controls():
     js = _js()
     assert "book-form" not in js, "底部表单面板又回来了？新书行应该插在表格第一行"
     block = re.search(r"function newBookRow\(\) \{.*?\n\}", js, re.S).group(0)
-    # 作者/分类/出版社/平台走跟列表行同一个 dimBtn 弹层，国籍按钮同 markup
+    # 作者/分类/出版社/平台走跟列表行同一个 dimBtn 弹层（均为多选），国籍按钮同 markup
     dims = set(re.findall(r'dimBtn\(d,\s*"(\w+)"', block))
-    assert dims == {"authors", "categories", "publishers", "platform"}
+    assert dims == {"authors", "categories", "publishers", "platforms"}
     assert 'data-dim="nationality"' in block
     # 列表列没有的四个字段不能丢
     for name in ("isbn", "douban_id", "rating", "importance"):
         assert f'name="{name}"' in block, f"新书行漏了字段 {name}"
     # 保存走 POST /api/books，取消/保存都有着落
     assert 'api("/api/books", { method: "POST"' in js
-
-
-def test_detail_platform_value_not_set_before_options():
-    """平台下拉的选项是 fillDimSelects 异步填的：在选项就位前给 select 赋值不生效，
-    详情页保存时提交 null 反而把书单页刚选的平台清掉。值只能在 fillDimSelects
-    里选项就位后恢复，详情页不许先手赋值。"""
-    js = _js()
-    assert 'el("platform").value' not in js, "详情页又在选项就位前给平台赋值了"
-    fn = re.search(r"async function fillDimSelects\(.*?\n\}", js, re.S).group(0)
-    assert ".value =" in fn, "fillDimSelects 没有在选项就位后恢复当前值"
 
 
 def test_sort_three_state_cycle():

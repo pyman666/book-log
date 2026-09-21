@@ -69,7 +69,7 @@ async function dashboard() {
   view.innerHTML = `
     <div class="ledger" id="ledger"></div>
     <div class="grid2">
-      <section class="panel wide"><h2><span class="no">壹</span><span class="t">书架</span><span class="hint">随机开场 · 点封面进详情，← → 翻书</span>
+      <section class="panel wide"><h2><span class="no">壹</span><span class="t">书影长廊</span><span class="hint">随机开场 · 点封面进详情，← → 翻书</span>
         <select id="shelf-year" class="inline right"></select><span id="shelf-stat" class="hint right"></span></h2>
         <div class="shelf">
           <button id="cf-prev" class="cf-arrow prev" aria-label="上一本">‹</button>
@@ -82,14 +82,14 @@ async function dashboard() {
         <div class="heat-wrap"><div class="chart" id="ch-heat"></div><div class="heat-stat" id="heat-stat"></div></div></section>
       <section class="panel span7"><h2><span class="no">叁</span><span class="t">口味光谱</span><span class="hint">读什么 · 什么语言 · 读完没</span></h2>
         <div class="chart" id="ch-spectrum"></div></section>
-      <section class="panel span5"><h2><span class="no">肆</span><span class="t">评分 × 重要度</span><span class="hint">气泡=盈亏，红=支出 绿=收入</span></h2>
+      <section class="panel span5"><h2><span class="no">肆</span><span class="t">评价点阵</span><span class="hint">气泡=盈亏，红=支出 绿=收入</span></h2>
         <div class="chart" id="ch-quadrant"></div></section>
       <section class="panel wide"><h2><span class="no">伍</span><span class="t">读书节奏</span><span class="hint">只数打过分的书 · 每期读完几本</span>
         <select id="curve-gran" class="inline right" title="时间粒度">
           <option value="week">按周</option><option value="month" selected>按月</option><option value="year">按年</option>
         </select></h2>
         <div class="chart" id="ch-curve"></div></section>
-      <section class="panel wide"><h2><span class="no">陆</span><span class="t">分布</span><span class="hint" id="dist-hint">本数 · Top 12</span>
+      <section class="panel wide"><h2><span class="no">陆</span><span class="t">钱去哪了</span><span class="hint" id="dist-hint">本数 · Top 12</span>
         <select id="dist-by" class="inline right" title="统计维度"></select>
         <select id="dist-agg" class="inline right" title="统计方式"></select></h2>
         <div class="chart" id="ch-dist"></div></section>
@@ -583,11 +583,11 @@ function bookRow(b) {
       <td class="title">${esc(b.title)}${b.douban_id ? ` <a class="dbk" title="豆瓣" href="https://book.douban.com/subject/${b.douban_id}/" target="_blank" rel="noopener">🌐</a>` : ""}${b.status === "in_library" && !b.note_file ? '<span class="warn"> 无正文</span>' : ""}</td>
       ${dimBtn(b, "authors", (b.authors || []).join("、"))}
       <td><button class="fill" data-id="${b.id}" data-dim="nationality"
-        title="按作者设置国籍（作者跨书共享，改动全局生效）">${
+        title="作者国籍（跨书共享，改动全局生效）">${
         (b.nationalities || []).join("、") ? esc(b.nationalities.join("、")) : '<span class="dull">＋ 添加</span>'}</button></td>
       ${dimBtn(b, "categories", (b.categories || []).join("、"))}
       ${dimBtn(b, "publishers", (b.publishers || []).join("、"))}
-      ${dimBtn(b, "platform", b.platform)}
+      ${dimBtn(b, "platforms", (b.platforms || []).join("、"))}
       <td><input class="inline" data-field="price" value="${b.price ?? ""}" placeholder="—" aria-label="价格"></td>
       <td><input class="inline" data-field="progress" value="${b.progress ?? ""}" placeholder="—" aria-label="进度"></td>
       <td><select class="inline st${b.status ? " has" : ""}" data-field="status" title="点击切换 在库 / 已售" aria-label="状态">
@@ -695,7 +695,6 @@ function openDimEditor(btn) {
   el.className = "pop";
   document.body.appendChild(el);
   if (btn.dataset.dim === "nationality") renderNationality(el, b);
-  else if (btn.dataset.dim === "platform") renderSingle(el, b, "platform");
   else renderMulti(el, b, btn.dataset.dim);
   pop = {
     el, anchor: btn,
@@ -742,29 +741,60 @@ function renderMulti(el, b, dim) {
   };
   draw();
 }
-// 国籍弹层：按作者逐个设国籍（作者行跨书共享，改一处全局生效；单作者书 = 一行下拉）
+// 国籍弹层：和分类一个模子——模糊匹配 + 候选勾选 + Enter 新建；已有作者的国籍在打开时
+// 就是勾上的（库里按作者带出）。唯一差别：国籍挂在作者身上（跨书共享），提交时把
+// 勾选集合换算成「作者→国籍」映射发 author-nationalities 接口（见 natMapFor）。
 function renderNationality(el, b) {
   const aus = b.authors || [];
   if (!aus.length) {
     el.innerHTML = '<div class="pop-empty">这本书没作者——国籍跟着作者走，先去作者列补人。</div>';
     return;
   }
-  const nats = FACETS.nationalities || [];
+  el.innerHTML = `<input class="pop-q" placeholder="模糊匹配 · Enter 添加新值" autocomplete="off"><div class="pop-list"></div>`;
+  const q = el.querySelector(".pop-q"), list = el.querySelector(".pop-list");
+  const toggle = (v, on) => {
+    const S = new Set(b.nationalities || []);
+    on ? S.add(v) : S.delete(v);
+    b.nationalities = [...S];               // 即时回显（b 是 rowItems/draft 共享引用；服务端回来后以真相为准）
+    commitNat(b, natMapFor(b, S));
+  };
+  const draw = () => {
+    const s = q.value.trim().toLowerCase();
+    const cur = b.nationalities || [];
+    const item = (n, on) => `<label class="pop-item"><input type="checkbox" ${on ? "checked" : ""}><span>${esc(n)}</span></label>`;
+    const sel = cur.filter(n => !s || n.toLowerCase().includes(s));                 // 已选置顶
+    const rest = (FACETS.nationalities || []).filter(x => !cur.includes(x) && (!s || x.toLowerCase().includes(s)));
+    list.innerHTML = sel.map(n => item(n, true)).join("") + rest.map(n => item(n, false)).join("")
+      || `<div class="pop-empty">无匹配 · 按 Enter 新建「${esc(q.value.trim())}」</div>`;
+    list.querySelectorAll(".pop-item input").forEach(cb => cb.onchange = () => {
+      toggle(cb.parentElement.querySelector("span").textContent, cb.checked);
+      draw();   // 弹层保持打开可连续勾，同分类
+    });
+  };
+  q.oninput = draw;
+  q.onkeydown = e => {
+    if (e.key !== "Enter") return;
+    const n = q.value.trim();
+    if (!n) return;
+    toggle(n, true);
+    q.value = "";
+    draw();
+  };
+  draw();
+}
+// 勾选集合 → 作者→国籍 映射：被取消的值清掉原主人；新值发给第一个没国籍的作者，
+// 单作者书直接顶（那就是换国籍）；多作者没空位时多余的值落空（重画时不显示，如实反映）。
+function natMapFor(b, S) {
+  const aus = b.authors || [];
   const cur = n => (b.author_nationalities || {})[n] || "";
-  el.innerHTML = aus.map(n => {
-    const v = cur(n);
-    const list = [""];
-    nats.forEach(x => { if (x !== v) list.push(x); });
-    if (v && !list.includes(v)) list.push(v);
-    const opts = list.map(o => `<option value="${esc(o)}" ${o === v ? "selected" : ""}>${esc(o) || "未知"}</option>`).join("");
-    return `<label class="pop-row"><span class="pop-name" title="${esc(n)}">${esc(n)}</span>` +
-      `<select data-a="${esc(n)}">${opts}</select></label>`;
-  }).join("");
-  el.querySelectorAll("select").forEach(s => s.onchange = () => {
-    const map = Object.fromEntries(aus.map(n => [n, cur(n)]));
-    map[s.dataset.a] = s.value;
-    commitNat(b, map);
-  });
+  const map = Object.fromEntries(aus.map(n => [n, cur(n)]));
+  for (const n of aus) if (map[n] && !S.has(map[n])) map[n] = "";
+  for (const v of S) {
+    if (aus.some(n => map[n] === v)) continue;
+    const free = aus.find(n => !map[n]);
+    if (free !== undefined || aus.length === 1) map[free ?? aus[0]] = v;
+  }
+  return map;
 }
 async function commitNat(b, map) {
   if (b.id === -1) {
@@ -779,18 +809,6 @@ async function commitNat(b, map) {
     Object.assign(b, fresh);
     paintRow(b);
   } catch (e) { toast(e.message, true); }
-}
-function renderSingle(el, b, dim) {
-  const poolKey = dim === "platform" ? "platforms" : dim;  // 字段单数，FACETS 键是复数
-  const cur = b[dim];
-  const opts = ["— 清空", ...(FACETS[poolKey] || []).filter(p => p !== cur)];
-  el.innerHTML = `<div class="pop-list">${opts.map(o =>
-    `<div class="pop-item${o === cur ? " on" : ""}"><span>${esc(o)}</span></div>`).join("")}</div>`;
-  el.querySelectorAll(".pop-item").forEach(it => it.onclick = () => {
-    const t = it.querySelector("span").textContent;
-    commitDim(b, dim, t === "— 清空" ? null : t);
-    closePop();
-  });
 }
 async function commitDim(b, dim, value) {
   if (b.id === -1) {                                         // 新书行草稿：回写草稿重绘，不碰库
@@ -813,7 +831,7 @@ const BOOK_FIELDS = `
   <label>作者（逗号分隔）<input name="authors"></label>
   <label>出版社（逗号分隔）<input name="publishers"></label>
   <label>分类（逗号分隔）<input name="categories"></label>
-  <label>平台<select name="platform"></select></label>
+  <label>平台（逗号分隔，可多）<input name="platforms"></label>
   <label>ISBN<input name="isbn"></label>
   <label>豆瓣编号（subject 号，可空）<input name="douban_id" pattern="[0-9]*" title="只填数字"></label>
   <label>价格（正=支出 负=收入，空=无）<input name="price" type="number" step="0.01"></label>
@@ -822,32 +840,23 @@ const BOOK_FIELDS = `
   <label>重要度（0-1）<input name="importance" type="number" step="0.1" min="0" max="1"></label>
   <label>状态<select name="status">
     <option value="in_library">在库</option><option value="sold">已售</option></select></label>
-  <label>阅读时间（可空；留空则聚合时按创建时间归年）<input name="read_at" type="date"></label>`;
-
-// 平台下拉的选项是异步填的：先赋值不生效（选项还没进 select，.value 恒为 ""），
-// 保存时提交 null 反而把刚在书单页选的平台清掉。所以值必须在本函数里
-// 选项就位之后恢复；候选池里没有的值补一个 option 兜底，不许静默丢选。
-async function fillDimSelects(form, platform = "") {
-  const f = await api("/api/facets");
-  const vals = [...f.platforms];
-  if (platform && !vals.includes(platform)) vals.push(platform);
-  form.elements.platform.innerHTML = `<option value="">—</option>` +
-    vals.map(v => `<option value="${esc(v)}">${esc(v)}</option>`).join("");
-  form.elements.platform.value = platform;
-}
+  <label>阅读时间（yyyy-mm-dd，可空；留空则聚合时按创建时间归年）<input name="read_at" type="text" placeholder="2024-03-05" spellcheck="false" autocomplete="off"></label>`;
 
 function formPayload(form) {
   // 必须走 form.elements[n]：form.title / form.status 会被 form 元素自身属性遮蔽
   const g = n => form.elements[n].value.trim();
+  const dt = g("read_at").replace(/[/\s.]/g, "-");   // 宽容：2024/03/05、2024.3.5 也收，统一成 yyyy-mm-dd
+  if (dt && !isoDate(dt)) throw new Error("日期按 yyyy-mm-dd 写，如 2024-03-05");
   return {
     title: g("title"), authors: splitList(g("authors")), publishers: splitList(g("publishers")),
-    categories: splitList(g("categories")), platform: g("platform") || null, isbn: g("isbn") || null,
+    categories: splitList(g("categories")), platforms: splitList(g("platforms")),
+    isbn: g("isbn") || null,
     douban_id: g("douban_id") || null,
     price: numOrNull(g("price")), progress: numOrNull(g("progress")), rating: numOrNull(g("rating")),
     importance: numOrNull(g("importance")), status: g("status") || "in_library",
     // created/last_modified 由服务端自动盖章：表单不提交，PUT 带上反而会把已有的 created 清空
-    // 库内 read_at 存 Notion 串（ts_key 按它排序/聚合）；日期输入框只产 ISO，提交前转回
-    read_at: g("read_at") ? toNotion(g("read_at")) : null,
+    // 库内 read_at 存 Notion 串（ts_key 按它排序/聚合）；框里手输 yyyy-mm-dd，提交前转回
+    read_at: dt ? toNotion(dt) : null,
   };
 }
 
@@ -856,7 +865,7 @@ function formPayload(form) {
 let draft = null;                     // 未保存的新书行；id=-1 与 rowItems 里的真实书区分
 
 const newDraft = () => ({ id: -1, title: "", authors: [], nationalities: [], author_nationalities: {},
-  categories: [], publishers: [], platform: null, price: null, progress: null,
+  categories: [], publishers: [], platforms: [], price: null, progress: null,
   status: "in_library", read_at: null,
   isbn: "", douban_id: "", rating: "", importance: "" });
 
@@ -923,11 +932,11 @@ function newBookRow() {
         value="${esc(d.title)}" autocomplete="off" aria-label="书名"></td>
       ${dimBtn(d, "authors", (d.authors || []).join("、"))}
       <td><button class="fill" data-id="-1" data-dim="nationality"
-        title="按作者设置国籍（作者跨书共享，改动全局生效）">${
+        title="作者国籍（跨书共享，改动全局生效）">${
         (d.nationalities || []).join("、") ? esc(d.nationalities.join("、")) : '<span class="dull">＋ 添加</span>'}</button></td>
       ${dimBtn(d, "categories", (d.categories || []).join("、"))}
       ${dimBtn(d, "publishers", (d.publishers || []).join("、"))}
-      ${dimBtn(d, "platform", d.platform)}
+      ${dimBtn(d, "platforms", (d.platforms || []).join("、"))}
       <td><input class="inline" data-field="price" value="${d.price ?? ""}" placeholder="—" aria-label="价格"></td>
       <td><input class="inline" data-field="progress" value="${d.progress ?? ""}" placeholder="—" aria-label="进度"></td>
       <td><select class="inline st${d.status ? " has" : ""}" data-field="status" title="点击切换 在库 / 已售" aria-label="状态">
@@ -953,7 +962,7 @@ async function saveDraft() {
   syncInputsToDraft();
   const payload = {
     title: draft.title, authors: draft.authors,
-    publishers: draft.publishers, categories: draft.categories, platform: draft.platform,
+    publishers: draft.publishers, categories: draft.categories, platforms: draft.platforms,
     isbn: draft.isbn || null, douban_id: draft.douban_id || null,
     price: draft.price, progress: draft.progress,
     rating: numOrNull(draft.rating), importance: numOrNull(draft.importance),
@@ -1038,6 +1047,7 @@ async function bookDetail(id) {
   el("authors").value = (b.authors || []).join("、");
   el("publishers").value = (b.publishers || []).join("、");
   el("categories").value = (b.categories || []).join("、");
+  el("platforms").value = (b.platforms || []).join("、");
   el("isbn").value = b.isbn || "";
   el("douban_id").value = b.douban_id || "";
   el("price").value = b.price ?? "";
@@ -1045,8 +1055,7 @@ async function bookDetail(id) {
   el("rating").value = b.rating ?? "";
   el("importance").value = b.importance ?? "";
   el("status").value = b.status;
-  el("read_at").value = dateOf(b.read_at);   // Notion 串 → ISO，date 输入框才能识别并弹出日历
-  await fillDimSelects(form, b.platform || "");
+  el("read_at").value = dateOf(b.read_at);   // 库内 Notion 串 → 框里只显 yyyy-mm-dd
   form.onsubmit = async e => {
     e.preventDefault();
     try {

@@ -21,10 +21,9 @@ CREATE TABLE IF NOT EXISTS books (
   created TEXT,
   read_at TEXT,                -- 阅读时间：只有读过（打过分）或人显式填过的才有值，其余 NULL
   last_modified TEXT,
-  douban_id TEXT,             -- 豆瓣 subject 号（封面真源，可经 og:image 重推）；前端拼 https://book.douban.com/subject/{id}/
-  platform_id INTEGER REFERENCES platforms(id)
+  douban_id TEXT               -- 豆瓣 subject 号（封面真源，可经 og:image 重推）；前端拼 https://book.douban.com/subject/{id}/
   -- 笔记正文不入库：raw/books/ 的文件名就是 (书名, 作者) 的纯函数，见 app/notes.py
-  -- category 为多对多（book_categories）：数据中 68 本书有多个分类
+  -- category/platform 为多对多（book_categories / book_platforms）：一本书可有买入/售出多个平台
   -- 无唯一约束：售出书 created 同为 NULL，同书名多批次只能靠应用层规则去重
 );
 CREATE TABLE IF NOT EXISTS book_authors (
@@ -39,10 +38,15 @@ CREATE TABLE IF NOT EXISTS book_categories (
   book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
   category_id INTEGER REFERENCES categories(id),
   PRIMARY KEY (book_id, category_id));
+CREATE TABLE IF NOT EXISTS book_platforms (
+  book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
+  platform_id INTEGER REFERENCES platforms(id),
+  PRIMARY KEY (book_id, platform_id));
 CREATE INDEX IF NOT EXISTS ix_book_title ON books(title);
 CREATE INDEX IF NOT EXISTS ix_book_status ON books(status);
 CREATE INDEX IF NOT EXISTS ix_book_created ON books(created);
 CREATE INDEX IF NOT EXISTS ix_bookcat_category ON book_categories(category_id);
+CREATE INDEX IF NOT EXISTS ix_bookplat_platform ON book_platforms(platform_id);
 """
 
 _YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
@@ -53,9 +57,8 @@ _MON_RE = re.compile(
 _MON3 = {m: i for i, m in enumerate(
     "jan feb mar apr may jun jul aug sep oct nov dec".split(), 1)}
 _SELECT_NAMES = """
-  SELECT b.*, f.name AS platform
+  SELECT b.*
   FROM books b
-  LEFT JOIN platforms f ON f.id = b.platform_id
 """
 _SORTABLE = {"id": "b.id", "title": "b.title", "price": "b.price", "rating": "b.rating",
              "progress": "b.progress", "importance": "b.importance",
@@ -101,7 +104,8 @@ def read_time(alias: str = "") -> str:
 
 _M2M = (("book_authors", "authors", "authors", "author_id"),
         ("book_publishers", "publishers", "publishers", "publisher_id"),
-        ("book_categories", "categories", "categories", "category_id"))
+        ("book_categories", "categories", "categories", "category_id"),
+        ("book_platforms", "platforms", "platforms", "platform_id"))
 
 
 def get_db(path):
@@ -140,6 +144,10 @@ def init_db(conn):
         conn.execute("ALTER TABLE authors ADD COLUMN chinese INTEGER")
     if "nationality" not in acols:
         conn.execute("ALTER TABLE authors ADD COLUMN nationality TEXT")
+    if "platform_id" in cols:   # 平台 1:1 → 多对多：旧列数据搬进 book_platforms 后删列
+        conn.execute("INSERT OR IGNORE INTO book_platforms (book_id, platform_id) "
+                     "SELECT id, platform_id FROM books WHERE platform_id IS NOT NULL")
+        conn.execute("ALTER TABLE books DROP COLUMN platform_id")
     # AI 面板/摘要已下线（idea 没想好，git 里留着尸骨）：缓存表连数据一并清掉
     conn.execute("DROP TABLE IF EXISTS ai_cache")
     conn.commit()
@@ -198,12 +206,11 @@ def _replace_m2m(conn, bid, b):
 def _apply(conn, bid, b):
     conn.execute(
         """UPDATE books SET isbn=?, price=?, importance=?, progress=?, rating=?, status=?,
-               created=?, read_at=?, last_modified=?, douban_id=?, platform_id=?
+               created=?, read_at=?, last_modified=?, douban_id=?
            WHERE id=?""",
         (b.get("isbn"), b.get("price"), b.get("importance"), b.get("progress"), b.get("rating"),
          b.get("status") or "in_library", b.get("created"), b.get("read_at"), b.get("last_modified"),
-         b.get("douban_id") or None,
-         _dim(conn, "platforms", b.get("platform")), bid))
+         b.get("douban_id") or None, bid))
     _replace_m2m(conn, bid, b)
     conn.commit()
 
@@ -234,12 +241,11 @@ def _insert(conn, b):
     """裸插入一行（不查重，不碰调用方给的时间戳）。"""
     cur = conn.execute(
         """INSERT INTO books (title, isbn, price, importance, progress, rating, status,
-                              created, read_at, last_modified, douban_id, platform_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                              created, read_at, last_modified, douban_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (b["title"], b.get("isbn"), b.get("price"), b.get("importance"), b.get("progress"),
          b.get("rating"), b.get("status") or "in_library", b.get("created"), b.get("read_at"),
-         b.get("last_modified"), b.get("douban_id") or None,
-         _dim(conn, "platforms", b.get("platform"))))
+         b.get("last_modified"), b.get("douban_id") or None))
     bid = cur.lastrowid
     _replace_m2m(conn, bid, b)
     conn.commit()
@@ -254,7 +260,6 @@ def _shape(conn, row):
         "status": row["status"], "created": row["created"], "read_at": row["read_at"],
         "last_modified": row["last_modified"],
         "douban_id": row["douban_id"],
-        "platform": row["platform"],
         "authors": _names(conn, "book_authors", "authors", "authors", "author_id", bid),
         "nationalities": [r[0] for r in conn.execute(
             "SELECT DISTINCT a.nationality FROM book_authors ba JOIN authors a ON a.id=ba.author_id "
@@ -266,6 +271,7 @@ def _shape(conn, row):
             "JOIN authors a ON a.id=ba.author_id WHERE ba.book_id=?", (bid,))},
         "publishers": _names(conn, "book_publishers", "publishers", "publishers", "publisher_id", bid),
         "categories": _names(conn, "book_categories", "categories", "categories", "category_id", bid),
+        "platforms": _names(conn, "book_platforms", "platforms", "platforms", "platform_id", bid),
     }
 
 
@@ -298,7 +304,9 @@ def list_books(conn, q=None, category=None, author=None, publisher=None, platfor
     if year:
         where.append(f"year_of({read_time('b')}) = ?"); args.append(year)
     if platform:
-        where.append("f.name = ?"); args.append(platform)
+        where.append("EXISTS (SELECT 1 FROM book_platforms bp JOIN platforms p ON p.id = bp.platform_id "
+                     "WHERE bp.book_id = b.id AND p.name = ?)")
+        args.append(platform)
     if status:
         where.append("b.status = ?"); args.append(status)
     if min_price is not None:
@@ -323,14 +331,14 @@ def list_books(conn, q=None, category=None, author=None, publisher=None, platfor
         where.append("EXISTS (SELECT 1 FROM book_categories bc JOIN categories c ON c.id = bc.category_id "
                      "WHERE bc.book_id = b.id AND c.name = ?)")
         args.append(category)
-    base = f" FROM books b LEFT JOIN platforms f ON f.id = b.platform_id WHERE {' AND '.join(where)}"
+    base = f" FROM books b WHERE {' AND '.join(where)}"
     total = conn.execute(f"SELECT COUNT(*){base}", args).fetchone()[0]
     # 副键必须跟主键同向：日期列的值可能整组为 NULL（已售书 created 全空），
     # 此时副键就是实际排序键——固定 ASC 会把「降序」翻成 id 升序（越老越前）
     direction = "DESC" if desc else "ASC"
     order = f"{_SORTABLE.get(sort, 'b.id')} {direction}, b.id {direction}"
     rows = conn.execute(
-        f"SELECT b.*, f.name AS platform{base} "
+        f"SELECT b.*{base} "
         f"ORDER BY {order} LIMIT ? OFFSET ?", args + [page_size, (page - 1) * page_size]).fetchall()
     return {"total": total, "page": page, "page_size": page_size,
             "items": [_shape(conn, r) for r in rows]}
@@ -348,8 +356,8 @@ def facets(conn):
         "SELECT DISTINCT c.name FROM categories c JOIN book_categories bc ON bc.category_id=c.id "
         "ORDER BY c.name")]
     platforms = [r[0] for r in conn.execute(
-        "SELECT DISTINCT f.name FROM platforms f JOIN books b ON b.platform_id=f.id "
-        "ORDER BY f.name")]
+        "SELECT DISTINCT p.name FROM platforms p JOIN book_platforms bp ON bp.platform_id = p.id "
+        "ORDER BY p.name")]
     nats = [r[0] for r in conn.execute(
         "SELECT DISTINCT a.nationality FROM authors a JOIN book_authors ba ON ba.author_id=a.id "
         "WHERE a.nationality IS NOT NULL AND a.nationality != '' AND a.nationality != '未知' "
@@ -388,8 +396,8 @@ def stats_group(conn, by, agg="count"):
         "category": "SELECT b.id, b.price, b.rating, c.name AS key FROM books b "
                     "JOIN book_categories bc ON bc.book_id = b.id "
                     "JOIN categories c ON c.id = bc.category_id",
-        "platform": "SELECT b.id, b.price, b.rating, f.name AS key FROM books b "
-                    "LEFT JOIN platforms f ON f.id = b.platform_id",
+        "platform": "SELECT b.id, b.price, b.rating, p.name AS key FROM books b "
+                    "JOIN book_platforms bp ON bp.book_id = b.id JOIN platforms p ON p.id = bp.platform_id",
         "author": "SELECT b.id, b.price, b.rating, a.name AS key FROM books b "
                   "JOIN book_authors ba ON ba.book_id = b.id JOIN authors a ON a.id = ba.author_id",
         "publisher": "SELECT b.id, b.price, b.rating, p.name AS key FROM books b "
