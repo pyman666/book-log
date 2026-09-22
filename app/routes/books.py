@@ -55,6 +55,8 @@ def update_book(payload: BookIn, request: Request, bid: int):
     with conn_of(request) as conn:
         try:
             book = dbmod.update_book(conn, bid, data)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
         except sqlite3.IntegrityError:
             raise HTTPException(400, "与已有记录冲突")
     if not book:

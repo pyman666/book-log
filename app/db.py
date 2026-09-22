@@ -205,10 +205,10 @@ def _replace_m2m(conn, bid, b):
 
 def _apply(conn, bid, b):
     conn.execute(
-        """UPDATE books SET isbn=?, price=?, importance=?, progress=?, rating=?, status=?,
+        """UPDATE books SET title=?, isbn=?, price=?, importance=?, progress=?, rating=?, status=?,
                created=?, read_at=?, last_modified=?, douban_id=?
            WHERE id=?""",
-        (b.get("isbn"), b.get("price"), b.get("importance"), b.get("progress"), b.get("rating"),
+        (b["title"], b.get("isbn"), b.get("price"), b.get("importance"), b.get("progress"), b.get("rating"),
          b.get("status") or "in_library", b.get("created"), b.get("read_at"), b.get("last_modified"),
          b.get("douban_id") or None, bid))
     _replace_m2m(conn, bid, b)
@@ -281,9 +281,15 @@ def get_book(conn, bid):
 
 
 def update_book(conn, bid, fields):
-    """按 id 部分更新：只更新 fields 里的键（含 None = 显式清空）。title 不可改。
+    """按 id 部分更新：只更新 fields 里的键（含 None = 显式清空）。title 可改，但不许改空。
+    注意：正文文件名按 (书名, 作者) 推导（app/notes.py），改名后 raw/books/ 里的 md
+    要跟着改同名，否则详情页显示无正文。
     last_modified 服务端盖：任何一次编辑都刷新，客户端传什么都不算。"""
-    fields = {k: v for k, v in fields.items() if k != "title"}
+    if "title" in fields:
+        t = (fields["title"] or "").strip()
+        if not t:
+            raise ValueError("书名不能为空")
+        fields["title"] = t
     row = conn.execute(_SELECT_NAMES + " WHERE b.id = ?", (bid,)).fetchone()
     if not row:
         return None

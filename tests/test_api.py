@@ -36,6 +36,14 @@ def test_create_requires_title(client):
     assert client.post("/api/books", json={"title": "  "}).status_code == 400
 
 
+def test_update_title(client):
+    """书名可改（raw/books/ 的 md 要人工同步改名）；改成空串拒绝。"""
+    bid = client.post("/api/books", json={"title": "旧名"}).json()
+    assert client.put(f"/api/books/{bid}", json={"title": " 新名 "}).json()["title"] == "新名"
+    assert client.put(f"/api/books/{bid}", json={"title": "  "}).status_code == 400
+    assert client.get(f"/api/books/{bid}").json()["title"] == "新名"   # 拒绝后不落库
+
+
 def test_list_filters(client):
     client.post("/api/books", json={"title": "甲", "price": 5, "categories": ["科幻"]})
     client.post("/api/books", json={"title": "乙", "price": -2, "categories": ["传记", "科幻"], "authors": ["张"]})

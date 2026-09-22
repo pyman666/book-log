@@ -446,7 +446,7 @@ function cfRender() {
 
 const filters = { q: "", category: "", author: "", publisher: "", platform: "",
                   nationality: "",
-                  status: "in_library", sort: "created", desc: "true", page: 1 };
+                  status: "", sort: "created", desc: "true", page: 1 };
 
 const MONS = "January February March April May June July August September October November December".split(" ");
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -827,7 +827,7 @@ async function commitDim(b, dim, value) {
 }
 
 const BOOK_FIELDS = `
-  <label>书名 *<input name="title"></label>
+  <label>书名 *<input name="title" title="改名后记得把 raw/books/ 里的笔记文件改成「新书名.md」，否则正文会失联"></label>
   <label>作者（逗号分隔）<input name="authors"></label>
   <label>出版社（逗号分隔）<input name="publishers"></label>
   <label>分类（逗号分隔）<input name="categories"></label>
@@ -1043,7 +1043,7 @@ async function bookDetail(id) {
   }
   const form = $("#d-form");
   const el = n => form.elements[n];
-  el("title").value = b.title; el("title").disabled = true;   // 书名不可改（避免破坏关联）
+  el("title").value = b.title;
   el("authors").value = (b.authors || []).join("、");
   el("publishers").value = (b.publishers || []).join("、");
   el("categories").value = (b.categories || []).join("、");
@@ -1060,7 +1060,6 @@ async function bookDetail(id) {
     e.preventDefault();
     try {
       const payload = formPayload(form);
-      delete payload.title;                                  // PUT 不允许改标题
       await api(`/api/books/${id}`, { method: "PUT", body: JSON.stringify(payload) });
       toast("已保存");
     } catch (err) { toast(err.message, true); }
