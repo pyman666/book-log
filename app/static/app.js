@@ -450,7 +450,8 @@ const filters = { q: "", category: "", author: "", publisher: "", platform: "",
 
 const MONS = "January February March April May June July August September October November December".split(" ");
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-// Notion 串（December 3, 2023 6:15 PM）↔ <input type=date> 的 YYYY-MM-DD
+// 库内日期是 ISO（'YYYY-MM-DD[ HH:MM]'）；取前 10 位当 yyyy-mm-dd 显示。
+// 旧 Notion 串（December 3, 2023 6:15 PM）也认：万一还有没迁到的数据，展示不致于空白。
 const dateOf = s => {
   if (!s) return "";
   const iso = String(s).match(/^(\d{4})-(\d{2})-(\d{2})/);
@@ -458,10 +459,6 @@ const dateOf = s => {
   const m = String(s).match(/([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})/);
   const mo = m ? MONS.findIndex(x => x.toLowerCase() === m[1].toLowerCase()) + 1 : 0;
   return mo ? `${m[3]}-${String(mo).padStart(2, "0")}-${String(m[2]).padStart(2, "0")}` : "";
-};
-const toNotion = iso => {
-  const [y, mo, d] = iso.split("-").map(Number);
-  return `${MONS[mo - 1]} ${d}, ${y}`;
 };
 const isoDate = s => /^\d{4}-\d{1,2}-\d{1,2}$/.test(s) && !isNaN(Date.parse(s));
 
@@ -497,8 +494,10 @@ async function booksView() {
       <th>状态</th>
       <th class="s" data-sort="read_at" title="点击：排序 · 再点翻转 · 再点取消">阅读</th>
     </tr></thead><tbody></tbody></table></div>
-    <div class="pager"><button id="pg-prev">上一页</button><span id="pg-info"></span>
-      <button id="pg-next">下一页</button></div>`;
+    <div class="pager"><button id="pg-first" title="第一页">首页</button>
+      <button id="pg-prev">上一页</button><span id="pg-info"></span>
+      <select id="pg-goto" aria-label="跳转到指定页"></select>
+      <button id="pg-next">下一页</button><button id="pg-last" title="最后一页">尾页</button></div>`;
   const apply = () => {
     filters.q = $("#f-q").value.trim();
     delete filters.year;                    // 年份下拉已删：顺手清掉分布面板可能残留的跳转筛选
@@ -539,8 +538,11 @@ async function booksView() {
   });
   view.appendChild(dtPicker);
   tb.addEventListener("change", e => { if (e.target.dataset.field) inlineEdit(e.target); });
+  $("#pg-first").onclick = () => { if (filters.page !== 1) { filters.page = 1; loadBooks(); } };
   $("#pg-prev").onclick = () => { if (filters.page > 1) { filters.page--; loadBooks(); } };
-  $("#pg-next").onclick = () => { filters.page++; loadBooks(); };
+  $("#pg-next").onclick = () => { if (filters.page < totalPages) { filters.page++; loadBooks(); } };
+  $("#pg-last").onclick = () => { if (filters.page !== totalPages) { filters.page = totalPages; loadBooks(); } };
+  $("#pg-goto").onchange = e => { const p = +e.target.value; if (p && p !== filters.page) { filters.page = p; loadBooks(); } };
   await loadBooks();
 }
 
@@ -598,6 +600,8 @@ function bookRow(b) {
     </tr>`;
 }
 
+let totalPages = 1;               // 当前筛选下的总页数（loadBooks 回填，首页/尾页/跳页用）
+
 async function loadBooks() {
   const p = new URLSearchParams();
   Object.entries(filters).forEach(([k, v]) => { if (v !== "" && v != null) p.set(k, v); });
@@ -608,9 +612,20 @@ async function loadBooks() {
   $("#tbl tbody").innerHTML = data.items.map(bookRow).join("") ||
     `<tr><td colspan="11" class="dull" style="text-align:center;padding:28px">没有符合这些条件的书——换个筛选，或点右上「＋」登记新书。</td></tr>`;
   const pages = Math.max(1, Math.ceil(data.total / data.page_size));
-  $("#pg-info").textContent = `共 ${data.total} 本 · 第 ${data.page}/${pages} 页`;
-  $("#pg-prev").disabled = data.page <= 1;
-  $("#pg-next").disabled = data.page >= pages;
+  totalPages = pages;
+  const cur = Math.min(data.page, pages);   // API 不钳制页码，残留页码可能超界
+  $("#pg-info").textContent = `共 ${data.total} 本`;
+  $("#pg-prev").disabled = cur <= 1;
+  $("#pg-next").disabled = cur >= pages;
+  $("#pg-first").disabled = cur <= 1;
+  $("#pg-last").disabled = cur >= pages;
+  const g = $("#pg-goto");
+  g.disabled = pages <= 1;
+  if (g.options.length !== pages) {          // 页数没变就不重建选项
+    g.innerHTML = Array.from({ length: pages }, (_, i) =>
+      `<option value="${i + 1}">${i + 1} / ${pages}</option>`).join("");
+  }
+  g.value = String(cur);
   renderSortMarks();
   if (draft) showNewRow();   // 筛选/排序/翻页重建表体，别把填到一半的新书行弄丢
 }
@@ -646,7 +661,7 @@ async function inlineEdit(el) {
     const s = el.value.trim().replace(/[\/\s.]/g, "-");      // 宽容：2024/03/05 也收，统一成 yyyy-mm-dd
     if (!s) v = null;                                        // 清空 = 没读
     else if (!isoDate(s)) { toast("日期按 yyyy-mm-dd 写，如 2024-03-05", true); return; }
-    else { el.value = s; v = toNotion(s); }                  // 存库仍为 Notion 串
+    else { el.value = s; v = s; }                            // 库内就是 ISO，不再转 Notion 串
   }
   else v = numOrNull(el.value);
   if (id === "-1") {                                         // 未落库的新书行：只回写草稿
@@ -855,8 +870,8 @@ function formPayload(form) {
     price: numOrNull(g("price")), progress: numOrNull(g("progress")), rating: numOrNull(g("rating")),
     importance: numOrNull(g("importance")), status: g("status") || "in_library",
     // created/last_modified 由服务端自动盖章：表单不提交，PUT 带上反而会把已有的 created 清空
-    // 库内 read_at 存 Notion 串（ts_key 按它排序/聚合）；框里手输 yyyy-mm-dd，提交前转回
-    read_at: dt ? toNotion(dt) : null,
+    // 库内 read_at 就是 ISO yyyy-mm-dd（排序=字典序）；框里校验过的值原样交
+    read_at: dt || null,
   };
 }
 
@@ -900,7 +915,7 @@ function syncInputsToDraft() {
   draft.progress = numOrNull(g("input[data-field='progress']"));
   draft.status = g("select[data-field='status']") || "in_library";
   const rt = g("input[data-field='read_at']").replace(/[/\s.]/g, "-");
-  draft.read_at = rt && isoDate(rt) ? toNotion(rt) : null;
+  draft.read_at = rt && isoDate(rt) ? rt : null;
   const form = $("#n-form");   // 副行是另一个 tr，主行里查不到
   if (form) {
     draft.isbn = form.elements.isbn.value.trim();
@@ -1079,6 +1094,25 @@ function route() {
   else if (h === "#/books") booksView();
   else dashboard();
 }
+
+// ---------- 主题：a=Anthropic（暖纸米黄·衬线，原样） o=OpenAI（白底·无衬线·大圆角）；深浅色仍随系统。
+// 颜色全走 CSS token，图表 init 时读 cssVar，切换后 route() 重建当前视图即可换色。
+const THEME_KEY = "bl.theme";
+let theme = localStorage.getItem(THEME_KEY) === "o" ? "o" : "a";
+function applyTheme() {
+  document.body.dataset.theme = theme;
+  const btn = $("#theme-btn");
+  if (!btn) return;
+  btn.textContent = theme === "o" ? "A" : "O";   // 按钮显示的是「切过去」的那个
+  btn.title = theme === "o" ? "切换到 Anthropic 主题" : "切换到 OpenAI 主题";
+}
+$("#theme-btn").onclick = () => {
+  theme = theme === "o" ? "a" : "o";
+  localStorage.setItem(THEME_KEY, theme);
+  applyTheme();
+  route();
+};
+applyTheme();
 
 window.addEventListener("hashchange", route);
 window.addEventListener("resize", () => charts.forEach(c => c.resize()));

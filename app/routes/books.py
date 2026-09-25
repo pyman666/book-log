@@ -80,7 +80,7 @@ def update_author_nationalities(payload: AuthorNatIn, request: Request, bid: int
                 continue
             conn.execute("UPDATE authors SET nationality = ? WHERE name = ?",
                          (nat.strip() or None, name))
-        conn.execute("UPDATE books SET last_modified = ? WHERE id = ?", (dbmod.now_notion(), bid))
+        conn.execute("UPDATE books SET last_modified = ? WHERE id = ?", (dbmod.now_stamp(), bid))
         conn.commit()
         return dbmod.get_book(conn, bid)
 

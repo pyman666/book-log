@@ -25,9 +25,15 @@ LATIN = re.compile(r"[A-Za-z]{2,}")  # 作者名含连续拉丁字母 → 翻译
 
 
 def _read_date(s):
-    """'April 27, 2024 11:32 AM' → date | None（宽容解析，失败即 None）"""
+    """'2024-04-27[ HH:MM]' / 'April 27, 2024 11:32 AM' → date | None（宽容解析，失败即 None）"""
     if not s:
         return None
+    m = re.match(r"(\d{4})-(\d{2})-(\d{2})", s)
+    if m:
+        try:
+            return datetime(int(m.group(1)), int(m.group(2)), int(m.group(3))).date()
+        except ValueError:
+            return None
     m = re.match(r"([A-Za-z]+) (\d{1,2}), (\d{4})", s)
     if not m or m.group(1) not in _MONTHS:
         return None

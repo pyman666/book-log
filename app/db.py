@@ -19,8 +19,8 @@ CREATE TABLE IF NOT EXISTS books (
   rating INTEGER,             -- 1~10
   status TEXT NOT NULL DEFAULT 'in_library',
   created TEXT,
-  read_at TEXT,                -- 阅读时间：只有读过（打过分）或人显式填过的才有值，其余 NULL
-  last_modified TEXT,
+  read_at TEXT,                -- 阅读时间：ISO 'YYYY-MM-DD'；只有读过（打过分）或人显式填过的才有值，其余 NULL
+  last_modified TEXT,          -- 三列日期全 ISO（v3 起）；字典序即时间序，不再存 Notion 英文串
   douban_id TEXT               -- 豆瓣 subject 号（封面真源，可经 og:image 重推）；前端拼 https://book.douban.com/subject/{id}/
   -- 笔记正文不入库：raw/books/ 的文件名就是 (书名, 作者) 的纯函数，见 app/notes.py
   -- category/platform 为多对多（book_categories / book_platforms）：一本书可有买入/售出多个平台
@@ -50,10 +50,12 @@ CREATE INDEX IF NOT EXISTS ix_bookplat_platform ON book_platforms(platform_id);
 """
 
 _YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
-# 登记/阅读/更新时间是 Notion 文本日期串，按文本排序得字母序（April<December…）。
-# _SORTABLE 的日期列改用 ts_key() 包一层，转成定宽 ISO「YYYY-MM-DD HH:MM」→ 字典序即时间序。
+# 日期列存 ISO（'YYYY-MM-DD[ HH:MM]'），字典序即时间序；排序仍经 ts_key 包一层：
+# 已是 ISO 的原样返回，外来/历史 Notion 串现场归一，解析不出→NULL 沉底，
+# 不给旧格式字符串留字母序乱排的机会（旧库未迁移前也靠这层兜住）。
+_ISO_RE = re.compile(r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?")
 _MON_RE = re.compile(
-    r"([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})(?:\s+(\d{1,2}):(\d{2}))?\s*([AP])M?", re.I)
+    r"([A-Za-z]+)\s+(\d{1,2}),\s*(\d{4})(?:\s+(\d{1,2}):(\d{2}))?\s*(?:([AP])M?)?", re.I)
 _MON3 = {m: i for i, m in enumerate(
     "jan feb mar apr may jun jul aug sep oct nov dec".split(), 1)}
 _SELECT_NAMES = """
@@ -67,11 +69,15 @@ _SORTABLE = {"id": "b.id", "title": "b.title", "price": "b.price", "rating": "b.
 
 
 def ts_key(s):
-    """'April 27, 2024 11:32 AM' → '2024-04-27 11:32'（定宽，字典序=时间序）。
+    """日期串 → 定宽排序键（字典序=时间序）：'2024-04-27 11:32'/'2024-04-27' 原样透传；
+    'April 27, 2024 11:32 AM' → '2024-04-27 11:32'。
     None / 解析不出 → None（SQL NULL，SQLite 恒排 ASC 首 / DESC 尾，符合「没日期的沉底」）。"""
     if not s:
         return None
-    m = _MON_RE.search(str(s))
+    t = str(s).strip()
+    if _ISO_RE.fullmatch(t):
+        return t.replace("T", " ")[:16]
+    m = _MON_RE.search(t)
     if not m:
         return None
     mon = _MON3.get(m.group(1)[:3].lower())
@@ -84,14 +90,9 @@ def ts_key(s):
     return f"{y:04d}-{mo:02d}-{d:02d}"
 
 
-_MON_FULL = "January February March April May June July August September October November December".split(" ")
-
-
-def now_notion():
-    """当前时间 → 'September 17, 2026 4:20 PM'，与库内既有 Notion 串同构（ts_key 可解析）。"""
-    t = datetime.now()
-    return (f"{_MON_FULL[t.month - 1]} {t.day}, {t.year} "
-            f"{t.hour % 12 or 12}:{t.minute:02d} {'AM' if t.hour < 12 else 'PM'}")
+def now_stamp():
+    """当前时间 → 'YYYY-MM-DD HH:MM'（库内 ISO 口径；排序=字典序，前端截前 10 位展示）。"""
+    return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
 def read_time(alias: str = "") -> str:
@@ -135,6 +136,7 @@ def init_db(conn):
         conn.execute("ALTER TABLE books ADD COLUMN read_at TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS ix_book_read_at ON books(read_at)")
     _migrate_read_at(conn)
+    _migrate_iso_dates(conn)
     if "cover_url" in cols:  # 封面已改为“磁盘文件存在性”，废弃 cover_url 列（douban_id 为真源）
         conn.execute("ALTER TABLE books DROP COLUMN cover_url")
     if "file_path" in cols:  # 笔记文件名改为按命名法推导（app/notes.py），不再入库：
@@ -153,8 +155,26 @@ def init_db(conn):
     conn.commit()
 
 
-# user_version 迁移位图：v2 = 已收敛 read_at 的 created 回填（只留打过分的书）
+# user_version 迁移位图：v2 = 已收敛 read_at 的 created 回填（只留打过分的书）；
+# v3 = 三列日期 Notion 串 → ISO
 _READ_AT_CLEANED = 2
+_ISO_DATES = 3
+
+
+def _migrate_iso_dates(conn):
+    """v3：created/last_modified → 'YYYY-MM-DD HH:MM'，read_at → 'YYYY-MM-DD'。
+    当初从 Notion 手抄的英文日期串纯属历史包袱（排序/显示两头杂技）；Notion 已成历史，
+    库里统一说 ISO。解析不出的值原样保留（ts_key 对旧串仍能现场归一，不会乱排）。"""
+    if conn.execute("PRAGMA user_version").fetchone()[0] >= _ISO_DATES:
+        return
+    for col, wide in (("created", True), ("last_modified", True), ("read_at", False)):
+        for rid, val in conn.execute(
+                f"SELECT id, {col} FROM books WHERE {col} IS NOT NULL AND {col} != ''").fetchall():
+            k = ts_key(val)
+            if k:
+                conn.execute(f"UPDATE books SET {col} = ? WHERE id = ?",
+                             (k if wide else k[:10], rid))
+    conn.execute(f"PRAGMA user_version = {_ISO_DATES}")
 
 
 def _migrate_read_at(conn):
@@ -233,7 +253,7 @@ def save_book(conn, b):
 def insert_book(conn, b):
     """网页「登记新书」专用：无条件新增，创建/更改时间由服务端盖章（客户端说了不算）。
     不走去重：同书名不同批次（多次买卖）本来就是多条记录。"""
-    now = now_notion()
+    now = now_stamp()
     return _insert(conn, {**b, "created": b.get("created") or now, "last_modified": now})
 
 
@@ -295,7 +315,7 @@ def update_book(conn, bid, fields):
         return None
     b = _shape(conn, row)
     b.update(fields)
-    b["last_modified"] = now_notion()
+    b["last_modified"] = now_stamp()
     _apply(conn, bid, b)
     return get_book(conn, bid)
 

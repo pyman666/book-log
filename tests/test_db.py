@@ -62,15 +62,16 @@ def test_polluted_read_at_keeps_only_rated(tmp_path):
     conn.execute("PRAGMA user_version = 1")                     # 回到治理前的库
     conn.commit()
     dbmod.init_db(conn)
+    # 同一趟启动还会顺带 v3：三列日期归一成 ISO；created 留时刻，read_at 统一截到日（与网页手填口径一致）
     assert dict(conn.execute("SELECT title, read_at FROM books").fetchall()) == {
-        "没读": None, "读过": "April 1, 2024 10:00 AM", "售出": None}
+        "没读": None, "读过": "2024-04-01", "售出": None}
     # AI 缓存表已下线：init_db 无条件把存量库里的它 DROP 掉
     assert conn.execute("SELECT COUNT(*) FROM sqlite_master WHERE name='ai_cache'").fetchone()[0] == 0
     conn.execute("UPDATE books SET read_at = created WHERE title = '没读'")
     conn.commit()
     dbmod.init_db(conn)                                         # 再启动一次，不二次抹值
     assert conn.execute("SELECT read_at FROM books WHERE title='没读'").fetchone()[0] \
-        == "April 1, 2024 10:00 AM"
+        == "2024-04-01 10:00"
 
 
 def test_read_at_can_differ_from_created(tmp_path):
@@ -236,3 +237,41 @@ def test_save_book_still_idempotent_for_import(tmp_path):
     assert save_book(conn, {**b, "price": 9.9}) == first
     assert conn.execute("SELECT COUNT(*) FROM books").fetchone()[0] == 1
     assert get_book(conn, first)["price"] == 9.9
+
+
+def test_ts_key_accepts_date_only():
+    """网页手填的 read_at 是无时刻的纯日期（旧版产出 'May 2, 2024'）：
+    旧正则强制 AM/PM 后缀，真实库里 178/199 条解析成 NULL，按阅读排序全坠底。"""
+    assert dbmod.ts_key("May 2, 2024") == "2024-05-02"
+    assert dbmod.ts_key("April 1, 2018") == "2018-04-01"
+    assert dbmod.ts_key("May 1, 2025 10:13 PM") == "2025-05-01 22:13"   # 带时刻仍对
+    assert dbmod.ts_key("2024-05-02") == "2024-05-02"                    # ISO 直接透传
+    assert dbmod.ts_key("2024-05-02 22:13") == "2024-05-02 22:13"
+
+
+def test_migrate_iso_dates_v3(tmp_path):
+    """v3 迁移：旧库三列 Notion 串 → ISO；created/last_modified 留时刻，read_at 截到日。"""
+    conn = make(tmp_path)
+    bid = save_book(conn, B(title="老数据", created="April 27, 2024 11:32 AM",
+                            read_at="May 2, 2024 9:00 PM", last_modified="June 1, 2025 8:05 AM"))
+    conn.execute("PRAGMA user_version = 2")                     # 回到 ISO 迁移前
+    conn.commit()
+    dbmod.init_db(conn)
+    r = get_book(conn, bid)
+    assert r["created"] == "2024-04-27 11:32"
+    assert r["read_at"] == "2024-05-02"
+    assert r["last_modified"] == "2025-06-01 08:05"
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+
+
+def test_sort_by_read_at_mixes_date_only_and_timestamped(tmp_path):
+    """阅读列排序：纯日期与带时刻同场竞技，字典序即时间序；无值的 SQLite 恒排 ASC 首。"""
+    conn = make(tmp_path)
+    save_book(conn, B(title="早", read_at="2023-01-05"))
+    save_book(conn, B(title="中", read_at="2024-06-01 20:00"))
+    save_book(conn, B(title="晚", read_at="2025-12-31"))
+    save_book(conn, B(title="没读"))
+    titles = [x["title"] for x in list_books(conn, sort="read_at", desc=True)["items"]]
+    assert titles == ["晚", "中", "早", "没读"]
+    titles = [x["title"] for x in list_books(conn, sort="read_at", desc=False)["items"]]
+    assert titles == ["没读", "早", "中", "晚"]
