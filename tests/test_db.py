@@ -82,15 +82,16 @@ def test_read_at_can_differ_from_created(tmp_path):
     assert book["read_at"] == "May 2, 2024"
 
 
-def test_year_filters_use_read_time_with_created_fallback(tmp_path):
-    """年度维度看「有效阅读时间」：read_at 有值算它，没值回落 created。"""
+def test_year_dimension_uses_created(tmp_path):
+    """年度维度=购买年（钱/账本口径）；阅读日是节奏曲线的事，两边不混用。"""
     conn = make(tmp_path)
-    save_book(conn, B(title="按阅读年", created="April 1, 2023", read_at="May 2, 2024"))
-    save_book(conn, B(title="只有登记日", created="April 1, 2024"))
-    save_book(conn, B(title="另一年", created="April 1, 2022", read_at="May 2, 2023"))
-    assert [i["title"] for i in list_books(conn, year=2024)["items"]] == ["按阅读年", "只有登记日"]
-    assert dbmod.facets(conn)["years"] == [2024, 2023]
-    assert {row["key"] for row in stats_group(conn, "year")} == {2024, 2023}
+    save_book(conn, B(title="甲", created="April 1, 2023", read_at="May 2, 2024"))
+    save_book(conn, B(title="乙", created="April 1, 2024"))
+    save_book(conn, B(title="丙", created="April 1, 2022", read_at="May 2, 2023"))
+    titles = [i["title"] for i in list_books(conn, year=2024, sort="id")["items"]]
+    assert titles == ["乙"]          # 2024 年买的是乙；甲读完在 2024 但买在 2023，不算
+    assert dbmod.facets(conn)["years"] == [2024, 2023, 2022]
+    assert {row["key"] for row in stats_group(conn, "year")} == {2024, 2023, 2022}
 
 
 def test_save_and_get(tmp_path):
@@ -275,3 +276,14 @@ def test_sort_by_read_at_mixes_date_only_and_timestamped(tmp_path):
     assert titles == ["晚", "中", "早", "没读"]
     titles = [x["title"] for x in list_books(conn, sort="read_at", desc=False)["items"]]
     assert titles == ["没读", "早", "中", "晚"]
+
+
+def test_list_books_default_order(tmp_path):
+    """默认序：阅读日倒序；未读（无 read_at）整体沉底，沉底段内 created 倒序。"""
+    conn = make(tmp_path)
+    save_book(conn, B(title="读得最近", created="2018-01-01", read_at="2025-09-01"))
+    save_book(conn, B(title="读得较早", created="2019-01-01", read_at="2024-03-01"))
+    save_book(conn, B(title="未读买得新", created="2026-01-01"))
+    save_book(conn, B(title="未读买得旧", created="2020-05-01"))
+    titles = [x["title"] for x in list_books(conn, desc=True)["items"]]
+    assert titles == ["读得最近", "读得较早", "未读买得新", "未读买得旧"]

@@ -188,12 +188,16 @@ def test_douban_id(client):
 
 
 def _seed(client):
+    # 三本都打过分且填了阅读日（read_at=读完日；created 是买书日，两套时间各管各的）
     client.post("/api/books", json={"title": "活着", "authors": ["余华"], "categories": ["长篇"],
-        "rating": 9, "importance": 0.9, "price": 50, "created": "April 27, 2024 11:32 AM"})
+        "rating": 9, "importance": 0.9, "price": 50, "created": "April 27, 2024 11:32 AM",
+        "read_at": "May 2, 2024"})
     client.post("/api/books", json={"title": "局外人", "authors": ["阿尔贝·加缪"], "categories": ["长篇"],
-        "rating": 8, "importance": 0.5, "price": -20, "created": "January 5, 2023 9:00 AM"})
+        "rating": 8, "importance": 0.5, "price": -20, "created": "January 5, 2023 9:00 AM",
+        "read_at": "February 1, 2023"})
     client.post("/api/books", json={"title": "八月HALF", "authors": ["宝春溪"], "categories": ["传记"],
-        "rating": 7, "importance": 0.8, "price": 40, "created": "April 27, 2024 11:32 AM"})
+        "rating": 7, "importance": 0.8, "price": 40, "created": "April 27, 2024 11:32 AM",
+        "read_at": "June 1, 2024"})
 
 
 def test_stats_daily(client):
@@ -213,23 +217,23 @@ def test_stats_daily_follows_created(client):
 
 
 def test_stats_curve_counts_only_rated(client):
-    """曲线只数“读过的一本”= 有评分；没打分的不入曲线。"""
-    _seed(client)                       # 3 本都有评分：2024-04 两本、2023-01 一本
+    """曲线只数「读过的一本」= 有评分且有阅读日；没打分的不入曲线。"""
+    _seed(client)                       # 3 本读完：2024-05 活着、2024-06 八月HALF、2023-02 局外人
     client.post("/api/books", json={"title": "只买没读",
                                     "created": "April 27, 2024 11:32 AM"})
     rows = {r["period"]: r for r in client.get("/api/stats/curve", params={"gran": "month"}).json()}
-    assert rows["2024-04-01"]["n"] == 2 and "只买没读" not in rows["2024-04-01"]["titles"]
-    assert rows["2023-01-01"]["n"] == 1
+    assert set(rows) == {"2024-05-01", "2024-06-01", "2023-02-01"}
+    assert all("只买没读" not in r["titles"] for r in rows.values())
 
 
-def test_stats_curve_prefers_read_at(client):
-    """曲线分桶：read_at 有值用它，没值回落 created（刚打分还没来得及填阅读日也不丢）。"""
+def test_stats_curve_requires_read_at(client):
+    """曲线严格按阅读日：read_at 没填 = 未读，就算打过分也不入曲线，绝不拿购买日兑数。"""
     client.post("/api/books", json={"title": "读过且填了日", "rating": 8,
                                     "created": "January 5, 2023 9:00 AM",
                                     "read_at": "June 15, 2024 8:00 PM"})
-    client.post("/api/books", json={"title": "刚打分", "rating": 7,
+    client.post("/api/books", json={"title": "打分没填日子", "rating": 7,
                                     "created": "March 3, 2023 9:00 AM"})
-    assert [r["period"] for r in client.get("/api/stats/curve").json()] == ["2023-03-01", "2024-06-01"]
+    assert [r["period"] for r in client.get("/api/stats/curve").json()] == ["2024-06-01"]
 
 
 def test_stats_spectrum(client):
@@ -251,6 +255,9 @@ def test_list_year_filter(client):
     _seed(client)
     assert client.get("/api/books", params={"year": 2024}).json()["total"] == 2
     assert client.get("/api/books", params={"year": 2023}).json()["total"] == 1
+    # 年度=购买年：买来还没读的也算在当年账里（钱是那年花的）
+    client.post("/api/books", json={"title": "买来未读", "created": "April 1, 2024"})
+    assert client.get("/api/books", params={"year": 2024}).json()["total"] == 3
 
 # ---------- AI ----------
 

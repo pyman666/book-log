@@ -67,7 +67,7 @@ def test_new_book_row_reuses_table_controls():
 
 
 def test_sort_three_state_cycle():
-    """点列名三态：第一次按该列排（默认方向），第二次翻转，第三次取消（回最新在前）。"""
+    """点列名三态：第一次按该列排（默认方向），第二次翻转，第三次取消（回默认序：最近读完在前）。"""
     js = _js()
     m = re.search(r"function nextSortState\([^)]*\)\s*\{.*?\n\}", js, re.S)
     assert m, "nextSortState 没了（排序三态逻辑改了？）"
@@ -90,11 +90,11 @@ console.log(JSON.stringify([
     out = subprocess.run([node, "-e", pre + driver], capture_output=True, text=True)
     assert out.returncode == 0, out.stderr
     a, b, c, d, e, f = json.loads(out.stdout)
-    # 文字列：升序 → 降序 → 取消
+    # 文字列：升序 → 降序 → 取消（回默认序：最近读完在前）
     assert (a, b, c) == ({"sort": "title", "desc": "false"},
                          {"sort": "title", "desc": "true"},
-                         {"sort": "created", "desc": "true"})
+                         {"sort": "default", "desc": "true"})
     # 数字列：降序 → 升序 → 取消
     assert (d, e, f) == ({"sort": "price", "desc": "true"},
                          {"sort": "price", "desc": "false"},
-                         {"sort": "created", "desc": "true"})
+                         {"sort": "default", "desc": "true"})

@@ -54,7 +54,7 @@
   --page: #f4f4f4; --panel: #ffffff; --surface-1: #ececec;
   --text-primary: #0d0d0d; --text-secondary: #565656; --muted: #8f8f8f;
   --grid: #ececec; --axis: #d9d9d9; --border: rgba(13, 13, 13, .12);
-  --seal: #0d0d0d; --on-seal: #ffffff;
+  --seal: #10a37f; --on-seal: #ffffff;     /* 品牌绿章，不走黑白那套 */
   --series-1: #10a37f;        /* OpenAI 绿 */
   --series-2: #3b82c4; --series-5: #6b7fd7;
   --div-pos: #d94848; --div-neg: #12a594;
@@ -73,7 +73,7 @@
     --page: #212121; --panel: #2f2f2f; --surface-1: #2a2a2a;
     --text-primary: #ececec; --text-secondary: #b4b4b4; --muted: #8f8f8f;
     --grid: #3a3a3a; --axis: #4a4a4a; --border: rgba(255, 255, 255, .13);
-    --seal: #ececec; --on-seal: #212121;
+    --seal: #19c39d; --on-seal: #0d0d0d;
     --series-1: #19c39d; --series-2: #6aa7e8; --series-5: #8f9ff0;
     --div-pos: #f05252; --div-neg: #34d399;
     --cat-1: #d96a48; --cat-2: #6f88cf; --cat-3: #829834; --cat-4: #cf7296;
@@ -102,6 +102,7 @@ header { display: flex; justify-content: space-between; align-items: center; gap
   background: var(--seal); color: var(--on-seal); font: 600 17px/1 var(--font-display);
   border-radius: 5px; transform: rotate(-2.5deg); box-shadow: 0 1px 3px rgba(120, 40, 20, .3);
   user-select: none; }
+.viz-root[data-theme="o"] .seal { box-shadow: 0 1px 3px rgba(16, 163, 127, .35); }   /* 绿章绿晕，别带暖色影 */
 .wordmark { font: 600 21px/1.1 var(--font-display); letter-spacing: .14em; display: block; }
 .tagline { font-size: 11px; color: var(--muted); letter-spacing: .06em; display: block; margin-top: 2px; }
 .hd-right { display: flex; align-items: center; gap: 14px; }
@@ -113,6 +114,24 @@ nav a:hover { color: var(--series-1); }
   background: none; border: 0; padding: 0; font: 600 13px/1 var(--font-body); }
 .hd-right .gh:hover { color: var(--series-1); transform: scale(1.1); }
 .hd-right .gh:focus-visible { outline: 2px solid color-mix(in srgb, var(--series-1) 40%, transparent); outline-offset: 1px; }
+/* 主题下拉：胶囊 chip + 自绘箭头（appearance:none，去掉浏览器素箭头），颜色随主题 token */
+.hd-right .gh-sel { -webkit-appearance: none; appearance: none;
+  height: 32px; padding: 0 28px 0 12px; border: 1px solid var(--border); border-radius: 999px;
+  background-color: var(--panel); color: var(--text-secondary);
+  font: 13px/1 var(--font-body); cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.5 4.5 6 8l3.5-3.5' fill='none' stroke='%23999' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 9px center; background-size: 11px;
+  transition: border-color .12s ease, color .12s ease; }
+.hd-right .gh-sel:hover { color: var(--series-1); border-color: var(--series-1); }
+.hd-right .gh-sel:focus-visible { outline: 2px solid color-mix(in srgb, var(--series-1) 40%, transparent); outline-offset: 1px; }
+/* 主题菜单：展开面板走 .pop 浮层（圆角/底色/投影随主题 token），不是系统画的方框 */
+.theme-menu { padding: 6px; }
+.theme-opt { display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 7px 10px; border: none; background: none; border-radius: var(--r-ctl);
+  font: 13px/1.4 var(--font-body); color: var(--text-primary); text-align: left; white-space: nowrap; }
+.theme-opt:hover { background: color-mix(in srgb, var(--series-1) 8%, transparent); color: var(--series-1); }
+.theme-opt.on { color: var(--series-1); font-weight: 600; }
+.theme-opt .tick { width: 14px; flex: none; color: var(--series-1); font-weight: 700; }
 
 main { max-width: 1120px; margin: 0 auto; padding: 20px 16px 48px; }
 button { padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--r-ctl);
@@ -231,8 +250,16 @@ td select.inline { width: auto; }
 
 /* ---------- 可填的账本：书单页原地改账 ---------- */
 .toolbar .right { margin-left: auto; }
-/* 筛选下拉统一宽：内容长短不齐（出版社 174 vs 其他 90）看着碎，拉齐 */
-.toolbar select { width: 126px; flex: none; }
+/* 筛选芯片＝可搜索单选下拉的触发器：文字左对齐 + 小箭头，宽度与原生 select 拉齐 */
+.toolbar .f-btn { width: 126px; flex: none; display: inline-flex; align-items: center;
+  justify-content: space-between; gap: 6px; padding: 5px 8px; text-align: left; }
+.f-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.f-caret { flex: none; }
+.f-caret::after { content: "▾"; color: var(--muted); font-size: 10px; }
+.f-btn.on { border-color: var(--series-1); }
+.f-btn.on .f-val { color: var(--series-1); font-weight: 600; }
+/* 弹层里的单选用行：抖掉基础 button 的描边底色，长得和 .pop-item 一致 */
+.pop-item.single { width: 100%; border: none; background: none; }
 /* 登记新书：左上角圆钮——印章红的圆 + 一枚「＋」，区别于行内药丸按钮 */
 .btn-circle { width: 42px; height: 42px; border-radius: 50%; flex: none; padding: 0;
   display: grid; place-items: center; background: var(--series-1); color: #fff;

@@ -95,14 +95,6 @@ def now_stamp():
     return datetime.now().strftime("%Y-%m-%d %H:%M")
 
 
-def read_time(alias: str = "") -> str:
-    """「有效阅读时间」的 SQL 表达式：read_at 有值用它，没值回落 created（登记日）。
-    只用于聚合查询，绝不写回列——read_at 为 NULL 必须真的是「没记过」，否则曲线又只是
-    购书曲线。回落是为了让刚打分的书（还没来得及填阅读日）不至于从年度筛选里消失。"""
-    p = f"{alias}." if alias else ""
-    return f"COALESCE(NULLIF({p}read_at, ''), {p}created)"
-
-
 _M2M = (("book_authors", "authors", "authors", "author_id"),
         ("book_publishers", "publishers", "publishers", "publisher_id"),
         ("book_categories", "categories", "categories", "category_id"),
@@ -322,13 +314,13 @@ def update_book(conn, bid, fields):
 
 def list_books(conn, q=None, category=None, author=None, publisher=None, platform=None,
                status=None, nationality=None, min_price=None, max_price=None, min_rating=None,
-               year=None, sort="id", desc=False, page=1, page_size=50):
+               year=None, sort="default", desc=False, page=1, page_size=50):
     where, args = ["1=1"], []
     if q:
         where.append("(b.title LIKE ? OR b.isbn = ?)")
         args += [f"%{q}%", q]
     if year:
-        where.append(f"year_of({read_time('b')}) = ?"); args.append(year)
+        where.append("year_of(b.created) = ?"); args.append(year)   # 年度=购买年（钱/账本维度，与剁手同口径）
     if platform:
         where.append("EXISTS (SELECT 1 FROM book_platforms bp JOIN platforms p ON p.id = bp.platform_id "
                      "WHERE bp.book_id = b.id AND p.name = ?)")
@@ -362,7 +354,12 @@ def list_books(conn, q=None, category=None, author=None, publisher=None, platfor
     # 副键必须跟主键同向：日期列的值可能整组为 NULL（已售书 created 全空），
     # 此时副键就是实际排序键——固定 ASC 会把「降序」翻成 id 升序（越老越前）
     direction = "DESC" if desc else "ASC"
-    order = f"{_SORTABLE.get(sort, 'b.id')} {direction}, b.id {direction}"
+    if sort == "default":      # 默认视图序：阅读日倒序；未读（没填阅读日）整体沉底，
+        # 沉底段内按购买日、id 倒序——以后读了填了阅读日，自然升回前排
+        order = (f"ts_key(b.read_at) {direction}, "
+                 f"ts_key(b.created) {direction}, b.id {direction}")
+    else:
+        order = f"{_SORTABLE.get(sort, 'b.id')} {direction}, b.id {direction}"
     rows = conn.execute(
         f"SELECT b.*{base} "
         f"ORDER BY {order} LIMIT ? OFFSET ?", args + [page_size, (page - 1) * page_size]).fetchall()
@@ -394,8 +391,8 @@ def facets(conn):
         "SELECT a.name, a.nationality FROM authors a JOIN book_authors ba ON ba.author_id=a.id "
         "WHERE a.nationality IS NOT NULL AND a.nationality != '' AND a.nationality != '未知'")}
     years = [r[0] for r in conn.execute(
-        f"SELECT DISTINCT year_of({read_time()}) FROM books "
-        f"WHERE year_of({read_time()}) IS NOT NULL ORDER BY 1 DESC")]
+        f"SELECT DISTINCT year_of(created) FROM books "
+        f"WHERE year_of(created) IS NOT NULL ORDER BY 1 DESC")]
     return {"categories": categories, "platforms": platforms,
             "authors": authors, "publishers": publishers,
             "nationalities": nats, "author_nationalities": author_nat, "years": years}
@@ -433,7 +430,7 @@ def stats_group(conn, by, agg="count"):
         "nationality": "SELECT b.id, b.price, b.rating, "
                        "COALESCE(NULLIF(a.nationality, ''), '未标注') AS key FROM books b "
                        "JOIN book_authors ba ON ba.book_id=b.id JOIN authors a ON a.id=ba.author_id",
-        "year": f"SELECT b.id, b.price, b.rating, year_of({read_time('b')}) AS key FROM books b",
+        "year": "SELECT b.id, b.price, b.rating, year_of(b.created) AS key FROM books b",
         "rating": "SELECT b.id, b.price, b.rating, b.rating AS key FROM books b",
     }[by]
     default_label = {"rating": "未评分", "year": "未知"}.get(by, "未分类")

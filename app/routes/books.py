@@ -18,7 +18,7 @@ def list_books(request: Request, q: Optional[str] = None, category: Optional[str
                platform: Optional[str] = None, status: Optional[str] = None,
                nationality: Optional[str] = None, min_price: Optional[float] = None,
                max_price: Optional[float] = None, min_rating: Optional[int] = None,
-               year: Optional[int] = None, sort: str = "id", desc: bool = False,
+               year: Optional[int] = None, sort: str = "default", desc: bool = False,
                page: int = 1, page_size: int = Query(50, le=500)):
     with conn_of(request) as conn:
         data = dbmod.list_books(conn, q=q, category=category, author=author,

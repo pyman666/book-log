@@ -84,7 +84,7 @@ async function dashboard() {
         <div class="chart" id="ch-spectrum"></div></section>
       <section class="panel span5"><h2><span class="no">肆</span><span class="t">评价点阵</span><span class="hint">气泡=盈亏，红=支出 绿=收入</span></h2>
         <div class="chart" id="ch-quadrant"></div></section>
-      <section class="panel wide"><h2><span class="no">伍</span><span class="t">读书节奏</span><span class="hint">只数打过分的书 · 每期读完几本</span>
+      <section class="panel wide"><h2><span class="no">伍</span><span class="t">读书节奏</span><span class="hint">打了分且填了阅读日的书 · 每期读完几本</span>
         <select id="curve-gran" class="inline right" title="时间粒度">
           <option value="week">按周</option><option value="month" selected>按月</option><option value="year">按年</option>
         </select></h2>
@@ -147,7 +147,7 @@ async function panelHeatmap() {
 }
 const hstat = (k, v) => `<div><div class="k">${k}</div><div class="v">${v}</div></div>`;
 
-// ---------- 读书节奏曲线（只数有评分的书，按 read_at、空则回落 created 分周/月/年） ----------
+// ---------- 读书节奏曲线（只数有评分且有阅读日的书，严格按 read_at 分周/月/年；未读不入曲线） ----------
 async function panelCurve() {
   const sel = $("#curve-gran");
   const c = bareChart($("#ch-curve"));   // 时间轴折线，不用直角默认配置
@@ -262,7 +262,7 @@ async function panelDistribution() {
                              nationality: "", year: "" });
     filters[DIST.by] = String(row.key);
     filters.page = 1;
-    location.hash = "#/books";
+    location.hash = filtersHash();   // 跳转 URL 带上新筛选：书单页后退一格回仪表盘，再前进回来筛选还在
   });
   await drawDist();
 }
@@ -444,9 +444,30 @@ function cfRender() {
 }
 
 
-const filters = { q: "", category: "", author: "", publisher: "", platform: "",
-                  nationality: "",
-                  status: "", sort: "created", desc: "true", page: 1 };
+// 筛选态＝模块状态 + hash 序列化（#/books?author=余华&page=2）：后退/前进/刷新都从 URL 恢复。
+// 写回用 replaceState：筛选/翻页只改写当前条目，不往历史里灌一堆中间态
+const DEFAULT_FILTERS = { q: "", category: "", author: "", publisher: "", platform: "",
+                          nationality: "",
+                          status: "", sort: "default", desc: "true", page: 1 };
+const filters = { ...DEFAULT_FILTERS };
+function filtersHash() {
+  const p = new URLSearchParams();
+  Object.entries(filters).forEach(([k, v]) => {
+    if (v === "" || v == null) return;                                      // 未选的不进 URL
+    if (k === "page" && Number(v) === 1) return;                            // 默认值不脏地址栏
+    if ((k === "sort" || k === "desc") && filters.sort === "default") return;
+    p.set(k, v);
+  });
+  const s = p.toString();
+  return "#/books" + (s ? `?${s}` : "");
+}
+function filtersFromHash(h) {
+  const p = new URLSearchParams(h.includes("?") ? h.slice(h.indexOf("?") + 1) : "");
+  Object.assign(filters, DEFAULT_FILTERS);          // 先复位：裸链接进来不得残留上一景状态
+  for (const k of Object.keys(DEFAULT_FILTERS)) if (p.has(k)) filters[k] = p.get(k);
+  filters.page = Number(p.get("page")) || 1;
+  delete filters.year;                              // 遗留参数（分布面板旧年份跳转）不进 URL
+}
 
 const MONS = "January February March April May June July August September October November December".split(" ");
 const esc = s => String(s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
@@ -465,20 +486,20 @@ const isoDate = s => /^\d{4}-\d{1,2}-\d{1,2}$/.test(s) && !isNaN(Date.parse(s));
 async function booksView() {
   charts.forEach(c => c.dispose()); charts = [];
   const f = FACETS = await api("/api/facets");
-  const sel = (key, items, allLabel) => `
-    <select data-f="${key}"><option value="">${allLabel}</option>
-    ${items.map(v => `<option ${String(filters[key]) === String(v) ? "selected" : ""}>${v}</option>`).join("")}</select>`;
+  // 筛选芯片＝可搜索单选下拉；状态也走同一套（native select 弹层是系统画的，风格突兀）。
+  // 芯片占位统一用不带「全部」的名词，「全部×××」在弹层首行；opts=[{v:值,l:显示名}]
+  const fDefs = [["author", f.authors.map(v => ({ v, l: v })), "作者"],
+                 ["category", f.categories.map(v => ({ v, l: v })), "分类"],
+                 ["nationality", f.nationalities.map(v => ({ v, l: v })), "国籍"],
+                 ["publisher", f.publishers.map(v => ({ v, l: v })), "出版社"],
+                 ["platform", f.platforms.map(v => ({ v, l: v })), "平台"],
+                 ["status", [{ v: "in_library", l: "在库" }, { v: "sold", l: "已售" }], "状态"]];
+  const fbtn = (key, label) =>
+    `<button type="button" class="f-btn" data-f="${key}" data-label="${label}"><span class="f-val"></span><span class="f-caret"></span></button>`;
   view.innerHTML = `
     <div class="toolbar">
       <input id="f-q" placeholder="书名 / ISBN" value="${filters.q}">
-      ${sel("author", f.authors, "作者")}
-      ${sel("category", f.categories, "分类")}
-      ${sel("nationality", f.nationalities, "国籍")}
-      ${sel("publisher", f.publishers, "出版社")}
-      ${sel("platform", f.platforms, "平台")}
-      <select data-f="status"><option value="">全部状态</option>
-        <option value="in_library" ${filters.status === "in_library" ? "selected" : ""}>在库</option>
-        <option value="sold" ${filters.status === "sold" ? "selected" : ""}>已售</option></select>
+      ${fDefs.map(([k, , l]) => fbtn(k, l)).join("")}
       <button id="f-apply" class="primary right">筛选</button>
       <button id="f-new" class="btn-circle" title="登记新书" aria-label="登记新书">＋</button>
     </div>
@@ -501,13 +522,23 @@ async function booksView() {
   const apply = () => {
     filters.q = $("#f-q").value.trim();
     delete filters.year;                    // 年份下拉已删：顺手清掉分布面板可能残留的跳转筛选
-    view.querySelectorAll("[data-f]").forEach(el => (filters[el.dataset.f] = el.value));
     filters.page = 1;
     loadBooks();
   };
   $("#f-apply").onclick = apply;
   $("#f-q").addEventListener("keydown", e => { if (e.key === "Enter") apply(); });
-  view.querySelectorAll("[data-f]").forEach(s => s.addEventListener("change", apply));
+  const fLabels = () => fDefs.forEach(([k, opts, name]) => {
+    const b = view.querySelector(`.f-btn[data-f="${k}"]`);
+    const hit = opts.find(o => String(o.v) === String(filters[k]));
+    b.querySelector(".f-val").textContent = hit ? hit.l : name;
+    b.classList.toggle("on", !!filters[k]);
+    b.title = filters[k] ? `已筛选 ${name}：${hit ? hit.l : filters[k]} · 点击修改` : `${name} · 点击搜索选择`;
+  });
+  fDefs.forEach(([k, opts]) => {
+    const b = view.querySelector(`.f-btn[data-f="${k}"]`);
+    b.onclick = () => openFilterPop(b, opts, filters[k], v => { filters[k] = v; fLabels(); apply(); });
+  });
+  fLabels();
   $("#f-new").onclick = toggleNewRow;
   $("#tbl thead").addEventListener("click", e => {
     const th = e.target.closest("th.s");
@@ -546,10 +577,54 @@ async function booksView() {
   await loadBooks();
 }
 
+// 可搜索的单选筛选弹层：opts=[{v:值,l:显示名}]；搜索框按名也按值即时匹配，点行即选即生效
+function openFilterPop(btn, opts, current, cb) {
+  if (popClosed.anchor === btn && Date.now() - popClosed.at < 300) return;  // 外点关闭后紧跟的 click 不重开
+  closePop();
+  const el = document.createElement("div");
+  el.className = "pop";
+  document.body.appendChild(el);
+  const label = btn.dataset.label;
+  el.innerHTML = `<input class="pop-q" placeholder="搜索 ${label}…" autocomplete="off"><div class="pop-list"></div>`;
+  const q = el.querySelector(".pop-q"), list = el.querySelector(".pop-list");
+  const row = (text, val, on) =>
+    `<button type="button" class="pop-item single${on ? " on" : ""}" data-v="${esc(val)}"><span>${esc(text)}</span></button>`;
+  const draw = () => {
+    const s = q.value.trim().toLowerCase();
+    const hits = opts.filter(o => !s || o.l.toLowerCase().includes(s) || String(o.v).toLowerCase().includes(s));
+    list.innerHTML = (s ? "" : row(`全部${label}`, "", !current)) +
+      hits.map(o => row(o.l, o.v, String(current) === String(o.v))).join("") ||
+      `<div class="pop-empty">无匹配${s ? `「${esc(q.value.trim())}」` : ""}</div>`;
+  };
+  q.addEventListener("input", draw);
+  q.addEventListener("keydown", e => {
+    if (e.key !== "Enter") return;                    // Enter 选第一条命中
+    const first = list.querySelector(".pop-item");
+    if (first) { cb(first.dataset.v); closePop(); }
+  });
+  list.addEventListener("click", e => {
+    const it = e.target.closest(".pop-item");
+    if (!it) return;
+    cb(it.dataset.v);
+    closePop();
+  });
+  el.addEventListener("keydown", e => { if (e.key === "Escape") closePop(); });
+  draw();
+  pop = {
+    el, anchor: btn,
+    outside: ev => { if (!el.contains(ev.target)) closePop(); },
+    onScroll: ev => { if (!el.contains(ev.target)) closePop(); },
+  };
+  positionPop(el, btn);
+  addEventListener("scroll", pop.onScroll, true);
+  setTimeout(() => document.addEventListener("mousedown", pop.outside, true));
+  q.focus();
+}
+
 // 点列名排序三态循环：第一次=该列默认方向（时间/数字降序在前，文字升序在前），
-// 第二次=翻转，第三次=取消按这列排（回默认顺序：最新在前）
+// 第二次=翻转，第三次=取消按这列排（回默认序：阅读日倒序，未读的按购买日沉底）
 const SORT_DESC_FIRST = new Set(["price", "progress", "rating", "read_at", "created"]);
-const DEFAULT_SORT = { sort: "created", desc: "true" };
+const DEFAULT_SORT = { sort: "default", desc: "true" };
 function nextSortState(sort, desc, col) {
   const def = SORT_DESC_FIRST.has(col) ? "true" : "false";
   if (sort !== col) return { sort: col, desc: def };
@@ -605,6 +680,7 @@ let totalPages = 1;               // 当前筛选下的总页数（loadBooks 回
 async function loadBooks() {
   const p = new URLSearchParams();
   Object.entries(filters).forEach(([k, v]) => { if (v !== "" && v != null) p.set(k, v); });
+  history.replaceState(null, "", filtersHash());   // 写回地址栏：从详情页浏览器后退时落在带筛选的列表
   const data = await api(`/api/books?${p}`);
   if (draft) syncInputsToDraft();   // 表体即将被整体替换，先把新书行里已填的值快照进草稿
   rowItems.clear();
@@ -691,10 +767,11 @@ function closePop() {
   popClosed = { at: Date.now(), anchor };
   pop = null;
 }
-function positionPop(el, anchor) {
+function positionPop(el, anchor, fixedW) {
   const r = anchor.getBoundingClientRect();
   el.style.left = "0px"; el.style.top = "0px";
-  const w = Math.max(240, Math.min(r.width + 60, 380));
+  // fixedW：窄菜单（如主题切换）自己报宽，不走「锚点宽+60」的启发式
+  const w = Math.min(fixedW ?? Math.max(240, Math.min(r.width + 60, 380)), innerWidth - 16);
   el.style.width = w + "px";
   const h = el.offsetHeight;
   const x = Math.max(8, Math.min(r.left, innerWidth - w - 8));
@@ -1082,7 +1159,7 @@ async function bookDetail(id) {
   $("#d-del").onclick = async () => {
     if (!confirm("删除该书目记录？（raw/books/ 正文文件不受影响）")) return;
     await api(`/api/books/${id}`, { method: "DELETE" });
-    location.hash = "#/books";
+    location.hash = filtersHash();   // 删完回列表，保留当时的筛选态
   };
 }
 
@@ -1091,27 +1168,61 @@ function route() {
   const h = location.hash || "#/";
   const m = h.match(/^#\/book\/(\d+)/);
   if (m) bookDetail(m[1]);
-  else if (h === "#/books") booksView();
+  else if (h === "#/books" || h.startsWith("#/books?")) { filtersFromHash(h); booksView(); }
   else dashboard();
 }
 
-// ---------- 主题：a=Anthropic（暖纸米黄·衬线，原样） o=OpenAI（白底·无衬线·大圆角）；深浅色仍随系统。
+// ---------- 主题登记处：加新主题＝这里加一行 + style.css 加一段 .viz-root[data-theme="x"] token（含深色块），
+// 菜单自动长出来。a=暖黄（米黄纸底·衬线） o=简洁（白底·无衬线·大圆角）；深浅色仍随系统。
 // 颜色全走 CSS token，图表 init 时读 cssVar，切换后 route() 重建当前视图即可换色。
+const THEMES = [
+  { id: "a", label: "暖黄" },
+  { id: "o", label: "简洁" },
+];
 const THEME_KEY = "bl.theme";
-let theme = localStorage.getItem(THEME_KEY) === "o" ? "o" : "a";
+const stored = localStorage.getItem(THEME_KEY);
+let theme = THEMES.some(t => t.id === stored) ? stored : "a";   // 旧值/脏值一律回默认
+const themeLabel = id => (THEMES.find(t => t.id === id) || THEMES[0]).label;
 function applyTheme() {
   document.body.dataset.theme = theme;
-  const btn = $("#theme-btn");
-  if (!btn) return;
-  btn.textContent = theme === "o" ? "A" : "O";   // 按钮显示的是「切过去」的那个
-  btn.title = theme === "o" ? "切换到 Anthropic 主题" : "切换到 OpenAI 主题";
+  const btn = $("#theme-sel");
+  if (btn) btn.textContent = themeLabel(theme);   // 箭头是 CSS 背景图，不用拼字符
 }
-$("#theme-btn").onclick = () => {
-  theme = theme === "o" ? "a" : "o";
-  localStorage.setItem(THEME_KEY, theme);
-  applyTheme();
-  route();
-};
+// 自定义下拉：native select 的展开面板是系统画的（纯方框），用现成 .pop 浮层自己做一份
+function openThemeMenu(btn) {
+  if (popClosed.anchor === btn && Date.now() - popClosed.at < 300) return;  // 外点关闭后紧跟的 click 不重开
+  closePop();
+  const el = document.createElement("div");
+  el.className = "pop theme-menu";
+  document.body.appendChild(el);
+  el.innerHTML = THEMES.map(t => `
+    <button type="button" class="theme-opt${t.id === theme ? " on" : ""}" data-t="${t.id}">
+      <span class="tick">${t.id === theme ? "✓" : ""}</span>${t.label}</button>`).join("");
+  el.addEventListener("click", e => {
+    const opt = e.target.closest(".theme-opt");
+    if (!opt) return;
+    if (opt.dataset.t !== theme) {
+      theme = opt.dataset.t;
+      localStorage.setItem(THEME_KEY, theme);
+      applyTheme();
+      route();                       // 重建视图：图表 init 时读 cssVar，换肤得重画
+    }
+    closePop();
+  });
+  el.addEventListener("keydown", e => { if (e.key === "Escape") closePop(); });
+  pop = {
+    el, anchor: btn,
+    outside: ev => { if (!el.contains(ev.target)) closePop(); },
+    onScroll: ev => { if (!el.contains(ev.target)) closePop(); },
+  };
+  positionPop(el, btn, 96);   // 往右开；菜单比胶囊芯片还窄，右缘自然离屏边留白
+  addEventListener("scroll", pop.onScroll, true);
+  setTimeout(() => document.addEventListener("mousedown", pop.outside, true));
+  const on = el.querySelector(".theme-opt.on") || el.querySelector(".theme-opt");
+  if (on) on.focus();                // 键盘用户：上下键选、Enter 确认，Esc 关
+}
+const themeBtn = $("#theme-sel");
+themeBtn.onclick = () => openThemeMenu(themeBtn);
 applyTheme();
 
 window.addEventListener("hashchange", route);
