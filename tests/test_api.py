@@ -263,7 +263,7 @@ def test_list_year_filter(client):
 
 
 def test_cover_endpoint(client, monkeypatch):
-    """单本抓封面：douban_id+isbn → 下载落盘；占位图→不落盘 has_cover=False。"""
+    """单本抓封面只需豆瓣号；占位图不落盘。"""
     import app.douban as dmod
     monkeypatch.setattr(dmod, "fetch_cover_url",
                         lambda i, **k: f"https://img3.doubanio.com/view/subject/s/public/s{i}.jpg")
@@ -271,17 +271,20 @@ def test_cover_endpoint(client, monkeypatch):
     b0 = client.post("/api/books", json={"title": "无豆瓣号"}).json()
     assert client.post(f"/api/books/{b0}/cover").status_code == 400
     b1 = client.post("/api/books", json={"title": "有书", "douban_id": "999", "isbn": "978999"}).json()
-    assert client.post(f"/api/books/{b1}/cover").json() == {"has_cover": True, "isbn": "978999"}
+    assert client.post(f"/api/books/{b1}/cover").json() == {"has_cover": True, "douban_id": "999"}
     root = client.app.state.root
-    assert (root / "raw/covers/978999.jpg").read_bytes() == b"bytes"
-    assert client.get("/cover/978999").status_code == 200        # 动态路由伺服本地文件
-    assert "978999" in client.get("/api/covers").json()
+    assert (root / "raw/covers/999.jpg").read_bytes() == b"bytes"
+    assert client.get("/cover/999").status_code == 200
+    assert "999" in client.get("/api/covers").json()
+    no_isbn = client.post("/api/books", json={"title": "无 ISBN", "douban_id": "777"}).json()
+    assert client.post(f"/api/books/{no_isbn}/cover").json() == {"has_cover": True, "douban_id": "777"}
+    assert (root / "raw/covers/777.jpg").read_bytes() == b"bytes"
     # 豆瓣无真封面（占位图）→ 不存脏图
     monkeypatch.setattr(dmod, "fetch_cover_url",
                         lambda i, **k: "https://img1.doubanio.com/cuphead/book-static/x.gif")
     b2 = client.post("/api/books", json={"title": "占位", "douban_id": "888", "isbn": "978888"}).json()
-    assert client.post(f"/api/books/{b2}/cover").json() == {"has_cover": False, "isbn": "978888"}
-    assert not (root / "raw/covers/978888.jpg").exists()
+    assert client.post(f"/api/books/{b2}/cover").json() == {"has_cover": False, "douban_id": "888"}
+    assert not (root / "raw/covers/888.jpg").exists()
 
 
 def test_cover_network_error_is_502(client, monkeypatch):
@@ -294,6 +297,59 @@ def test_cover_network_error_is_502(client, monkeypatch):
     assert client.post(f"/api/books/{b1}/cover").status_code == 502
 
 
+def test_isbn_lookup_is_separate_from_cover(client, monkeypatch):
+    import app.douban as dmod
+    seen = []
+    monkeypatch.setattr(dmod, "lookup_subject_by_isbn", lambda isbn: seen.append(isbn) or "2253642")
+    monkeypatch.setattr(dmod, "fetch_cover_url",
+                        lambda did: f"https://img3.doubanio.com/view/subject/s/public/s{did}.jpg")
+    monkeypatch.setattr(dmod, "_download", lambda url: b"cover")
+    bid = client.post("/api/books", json={"title": "明朝那些事儿", "isbn": "9787505723788"}).json()
+    assert client.post(f"/api/books/{bid}/cover").status_code == 400
+    response = client.post(f"/api/books/{bid}/douban-id")
+    assert response.status_code == 200
+    assert response.json() == {"douban_id": "2253642"}
+    assert seen == ["9787505723788"]
+    assert client.get(f"/api/books/{bid}").json()["douban_id"] == "2253642"
+    assert not list(client.app.state.covers_dir.iterdir())
+    assert client.post(f"/api/books/{bid}/cover").json()["has_cover"] is True
+    assert (client.app.state.covers_dir / "2253642.jpg").read_bytes() == b"cover"
+    assert len(seen) == 1
+
+
+def test_cover_does_not_save_unverified_id(client, monkeypatch):
+    import app.douban as dmod
+    bid = client.post("/api/books", json={"title": "无匹配", "isbn": "9787505723788"}).json()
+
+    def no_match(isbn):
+        raise ValueError("豆瓣未找到该 ISBN 对应的条目")
+
+    monkeypatch.setattr(dmod, "lookup_subject_by_isbn", no_match)
+    r = client.post(f"/api/books/{bid}/douban-id")
+    assert r.status_code == 400
+    assert client.get(f"/api/books/{bid}").json()["douban_id"] is None
+    no_isbn = client.post("/api/books", json={"title": "无 ISBN"}).json()
+    assert client.post(f"/api/books/{no_isbn}/douban-id").status_code == 400
+    invalid_id = client.post("/api/books", json={
+        "title": "错误编号", "douban_id": "../wrong"}).json()
+    assert client.post(f"/api/books/{invalid_id}/cover").status_code == 400
+
+
+def test_isbn_lookup_rejects_stale_book_change(client, monkeypatch):
+    import app.douban as dmod
+    bid = client.post("/api/books", json={"title": "旧版", "isbn": "9787505723788"}).json()
+
+    def lookup(isbn):
+        client.put(f"/api/books/{bid}", json={"isbn": "9787505723789"})
+        return "2253642"
+
+    monkeypatch.setattr(dmod, "lookup_subject_by_isbn", lookup)
+    assert client.post(f"/api/books/{bid}/douban-id").status_code == 409
+    book = client.get(f"/api/books/{bid}").json()
+    assert book["isbn"] == "9787505723789"
+    assert book["douban_id"] is None
+
+
 def test_wall_endpoint(client, monkeypatch):
     """书架只显有本地封面文件的书（判据 = 磁盘文件，不是 DB 列）。"""
     import app.douban as dmod
@@ -302,12 +358,14 @@ def test_wall_endpoint(client, monkeypatch):
     monkeypatch.setattr(dmod, "_download", lambda u, **k: b"x")
     b1 = client.post("/api/books", json={"title": "有封面", "douban_id": "1", "isbn": "9781", "rating": 9,
                                          "created": "April 27, 2024 11:32 AM"}).json()
-    client.post(f"/api/books/{b1}/cover")                       # 落盘 9781
+    client.post(f"/api/books/{b1}/cover")
     client.post("/api/books", json={"title": "无封面", "isbn": "9782"})   # 有 isbn 但未落盘
+    b3 = client.post("/api/books", json={"title": "无 ISBN 的封面", "douban_id": "3"}).json()
+    client.post(f"/api/books/{b3}/cover")
     w = client.get("/api/stats/wall").json()
-    assert w["total"] == 2                                   # total 是全库本数
-    assert [i["id"] for i in w["items"]] == [b1]             # items 只含磁盘有文件的
-    assert set(w["items"][0]) == {"id", "title", "read_at", "rating", "isbn"}
+    assert w["total"] == 3
+    assert [i["id"] for i in w["items"]] == [b1, b3]
+    assert set(w["items"][0]) == {"id", "title", "read_at", "rating", "isbn", "douban_id"}
     assert w["items"][0]["isbn"] == "9781"
 
 

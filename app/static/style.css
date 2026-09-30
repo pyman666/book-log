@@ -333,6 +333,10 @@ td input.dt.has { background-image: none; padding-right: 6px; }
   border-radius: 3px; box-shadow: 0 6px 18px rgba(60, 35, 10, .28); background: var(--panel); }
 .meta label { display: block; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
 .meta input, .meta select { width: 100%; margin-top: 2px; }
+.meta label.d-label { margin-bottom: 0; }
+.d-field { display: flex; gap: 6px; margin: 2px 0 8px; }
+.meta .d-field input { flex: 1; min-width: 0; width: auto; margin-top: 0; }
+.d-field button { flex: none; width: 76px; padding-left: 0; padding-right: 0; white-space: nowrap; }
 .row { display: flex; gap: 8px; margin-top: 10px; }
 .obs { font-size: 12px; color: var(--series-1); text-decoration: none; margin-left: 8px; }
 .obs:hover { text-decoration: underline; }

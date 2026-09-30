@@ -312,6 +312,15 @@ def update_book(conn, bid, fields):
     return get_book(conn, bid)
 
 
+def save_douban_id_if_missing(conn, bid, isbn, douban_id):
+    changed = conn.execute(
+        "UPDATE books SET douban_id = ?, last_modified = ? "
+        "WHERE id = ? AND isbn = ? AND (douban_id IS NULL OR douban_id = '')",
+        (douban_id, now_stamp(), bid, isbn)).rowcount
+    conn.commit()
+    return bool(changed)
+
+
 def list_books(conn, q=None, category=None, author=None, publisher=None, platform=None,
                status=None, nationality=None, min_price=None, max_price=None, min_rating=None,
                year=None, sort="default", desc=False, page=1, page_size=50):

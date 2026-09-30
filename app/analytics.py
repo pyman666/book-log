@@ -5,7 +5,7 @@
 - reading_curve(conn)   读书节奏曲线（严格按 read_at 分桶；没填阅读日=未读，不入曲线）
 - taste_spectrum(conn)  口味光谱（StoryGraph 式三条堆叠 bar）
 - quadrant(conn)        评分 × 重要度象限（气泡=盈亏）
-- cover_wall(conn)      封面墙（只出 id/title/read_at/rating/isbn 五字段，按 isbn 关联本地封面）
+- cover_wall(conn)      封面墙（按豆瓣号或旧 ISBN 关联本地封面）
 """
 import re
 from collections import defaultdict
@@ -148,12 +148,13 @@ def quadrant(conn):
 
 def cover_wall(conn):
     """封面墙：只返回前端需要的 5 字段（/api/books 全量 payload 对纯展示太肥）。
-    以 isbn 为经键（封面 = 本地 raw/covers/<isbn>.* 文件）；是否“有封面”由路由层
-    按磁盘实际文件过滤（analytics 不碰文件系统，保持纯函数）。total = 全库本数。
+    封面优先以豆瓣号关联，旧 ISBN 文件兼容；是否“有封面”由路由层按磁盘文件过滤。
+    total = 全库本数。
     输出的 read_at 是原值：空 = 未读，前端 yearOf 显「—」；买书时间在 created，不在这。
     """
     total = conn.execute("SELECT COUNT(*) FROM books").fetchone()[0]
     rows = conn.execute(
-        "SELECT id, title, read_at, rating, isbn FROM books "
-        "WHERE isbn IS NOT NULL AND isbn != '' ORDER BY id").fetchall()
+        "SELECT id, title, read_at, rating, isbn, douban_id FROM books "
+        "WHERE (isbn IS NOT NULL AND isbn != '') OR (douban_id IS NOT NULL AND douban_id != '') "
+        "ORDER BY id").fetchall()
     return {"total": total, "items": [dict(r) for r in rows]}

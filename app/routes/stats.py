@@ -61,6 +61,6 @@ def stats_wall(request: Request):
     stems = local_cover_stems(covers_dir(request))
     with conn_of(request) as conn:
         data = analytics.cover_wall(conn)
-    data["items"] = [item for item in data["items"] if item["isbn"] in stems]
+    data["items"] = [item for item in data["items"]
+                     if item["douban_id"] in stems or item["isbn"] in stems]
     return data
-

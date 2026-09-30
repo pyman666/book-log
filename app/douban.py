@@ -1,14 +1,15 @@
-"""豆瓣封面：以 douban_id 为真源，抓取 og:image 并落盘 raw/covers/<isbn>.<ext>。
+"""豆瓣封面：以 douban_id 为真源，抓取 og:image 并落盘 raw/covers/<douban_id>.<ext>。
 
-封面真值 = 磁盘上是否存在 `<isbn>.<ext>` 文件（DB 不再存 cover_url，douban_id 才是可重推的根）。
+旧版 `<isbn>.<ext>` 文件仍由展示层兼容；新抓取只按豆瓣编号命名。
 
-- 单本：fetch_cover_local(douban_id, isbn, dir)，前端“抓封面”按钮按需调用
+- ISBN 查号：豆瓣搜索取第一条，核对条目页 ISBN 后存豆瓣号，与抓封面分开
+- 单本：fetch_cover_local(douban_id, dir)，只需豆瓣号
 - 批量：python -m app.douban --localize [--limit N]
-  遍历有 douban_id+isbn 且尚无本地封面的书，逐本 og:image→下载落盘。
+  遍历有 douban_id 且尚无本地封面的书，逐本 og:image→下载落盘。
   （豆瓣 2026-09 起 CDN 校验 Referer，热链在浏览器里 403，必须本地化）
 - 单页测试：python -m app.douban --test <douban_id>（只打印 og:image URL）
 网络纪律：2.5s+抖动限速、成功即落盘、Ctrl-C 安全、连续 6 败刹车、幂等续跑（文件在就跳）。
-手工补图：直接把图命名为 <isbn>.jpg 放进 raw/covers/ 即可，前端自动认（无需挂接命令）。
+手工补图：直接把图命名为 <douban_id>.jpg（或旧版 <isbn>.jpg）放进 raw/covers/ 即可。
 """
 import argparse
 import json
@@ -26,7 +27,70 @@ UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
                     "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
       "Referer": "https://book.douban.com/"}
 OG = re.compile(r'<meta property="og:image"\s+content="([^"]+)"')
+SEARCH_DATA = re.compile(r"window\.__DATA__\s*=\s*(\{.*?\});\s*\n", re.S)
+BOOK_JSON = re.compile(r'<script\b[^>]*type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', re.S | re.I)
 SMALL = re.compile(r"/(l|m)/public/")
+
+
+def _isbn_checksum_ok(key: str) -> bool:
+    if len(key) == 13:
+        return sum(int(c) * (1 if i % 2 == 0 else 3) for i, c in enumerate(key)) % 10 == 0
+    return sum((10 if c == "X" else int(c)) * (10 - i) for i, c in enumerate(key)) % 11 == 0
+
+
+def _get_page(url: str, timeout: float, **kwargs):
+    try:
+        r = httpx.get(url, headers=UA, timeout=timeout, follow_redirects=True, **kwargs)
+    except httpx.HTTPError as e:
+        raise RuntimeError(f"网络错误: {type(e).__name__}") from e
+    if r.status_code != 200:
+        raise RuntimeError(f"豆瓣返回 HTTP {r.status_code}")
+    return r
+
+
+def _search_first_subject(key: str, timeout: float) -> str | None:
+    """豆瓣图书搜索按 ISBN 查，取第一条结果；搜不到返回 None。"""
+    r = _get_page("https://search.douban.com/book/subject_search", timeout,
+                  params={"search_text": key, "cat": "1001"})
+    m = SEARCH_DATA.search(r.text)
+    if not m:
+        raise RuntimeError("豆瓣搜索页结构变化，无法解析结果")
+    try:
+        items = json.loads(m.group(1)).get("items") or []
+    except (json.JSONDecodeError, AttributeError) as e:
+        raise RuntimeError("豆瓣搜索结果无法解析") from e
+    for item in items:
+        sid = str(item.get("id", "")) if isinstance(item, dict) else ""
+        if sid.isdigit():
+            return sid
+    return None
+
+
+def lookup_subject_by_isbn(isbn: str, timeout: float = 12) -> str:
+    """豆瓣搜索 ISBN 取第一条，再核对条目页 ISBN；不能把相近版本当成同一本。"""
+    key = re.sub(r"[\s-]", "", isbn or "").upper()
+    if not re.fullmatch(r"(?:\d{10}|\d{9}X|\d{13})", key):
+        raise ValueError("ISBN 须为 10 或 13 位")
+    subject_id = _search_first_subject(key, timeout)
+    if not subject_id:
+        hint = "" if _isbn_checksum_ok(key) else "（该 ISBN 校验位不对，可能录错了）"
+        raise ValueError(f"豆瓣搜不到 ISBN {key}{hint}")
+    r = _get_page(f"https://book.douban.com/subject/{subject_id}/", timeout)
+    page_isbns = []
+    for script in BOOK_JSON.findall(r.text):
+        try:
+            data = json.loads(script)
+        except json.JSONDecodeError as e:
+            raise RuntimeError("豆瓣图书元数据无法解析") from e
+        entries = data if isinstance(data, list) else [data]
+        page_isbns.extend(entry.get("isbn") for entry in entries
+                          if isinstance(entry, dict) and entry.get("@type") == "Book")
+    if len(page_isbns) != 1 or not isinstance(page_isbns[0], str):
+        raise ValueError(f"豆瓣条目 {subject_id} 没有可核对的 ISBN，未保存豆瓣号")
+    found = re.sub(r"[\s-]", "", page_isbns[0]).upper()
+    if found != key:
+        raise ValueError(f"豆瓣搜索结果 {subject_id} 的 ISBN 是 {found}，与书目不一致，未保存豆瓣号")
+    return subject_id
 
 
 def fetch_cover_url(douban_id: str, timeout: float = 12) -> str:
@@ -58,10 +122,10 @@ PLACEHOLDER = "book-static"   # 豆瓣无封面时的默认占位图路径，不
 EXTS = ("jpg", "jpeg", "png", "webp", "gif")
 
 
-def _cover_path(covers_dir, isbn: str, url: str) -> Path:
-    """按 isbn 定本地路径（扩展名取自远程 URL）。"""
+def _cover_path(covers_dir, douban_id: str, url: str) -> Path:
+    """按豆瓣编号定本地路径（扩展名取自远程 URL）。"""
     ext = url.rsplit(".", 1)[-1].lower()
-    return covers_dir / f"{isbn}.{ext if ext in EXTS else 'jpg'}"
+    return covers_dir / f"{douban_id}.{ext if ext in EXTS else 'jpg'}"
 
 
 def _local_stems(covers_dir):
@@ -69,14 +133,13 @@ def _local_stems(covers_dir):
             if p.suffix.lower().lstrip(".") in EXTS} if covers_dir.is_dir() else set()
 
 
-def fetch_cover_local(douban_id, isbn, covers_dir):
-    """新书单本：拓 og:image 并下载落盘 covers_dir/<isbn>.<ext>。
-    返回落盘 Path；占位图/无 isbn 返回 None（不存脏图）；网络/解析失败抛 RuntimeError。"""
+def fetch_cover_local(douban_id, covers_dir):
+    """按豆瓣编号下载封面；占位图返回 None，网络/解析失败抛 RuntimeError。"""
     url = fetch_cover_url(douban_id)
-    if not isbn or PLACEHOLDER in url:
+    if PLACEHOLDER in url:
         return None
     covers_dir.mkdir(parents=True, exist_ok=True)
-    dest = _cover_path(covers_dir, isbn, url)
+    dest = _cover_path(covers_dir, douban_id, url)
     if not dest.exists():
         try:
             dest.write_bytes(_download(url))
@@ -87,23 +150,26 @@ def fetch_cover_local(douban_id, isbn, covers_dir):
 
 
 def localize_covers(conn, covers_dir, *, sleep_s=2.5, jitter=1.5, max_abort=6, limit=None):
-    """以 douban_id 为源批量本地化：遍历有 douban_id+isbn、尚缺本地封面的书，
-    逐本 og:image → 下载落盘 raw/covers/<isbn>.<ext>。不读不写 DB 列（douban_id 是可重推真源）。
-    幂等：文件已存在直接跳过（续跑零成本）；同 isbn 多批次去重；占位图计入 skip；
+    """以 douban_id 为源批量本地化：遍历有豆瓣号、尚缺本地封面的书，
+    逐本 og:image → 下载落盘 raw/covers/<douban_id>.<ext>。不写 DB 列。
+    幂等：文件已存在直接跳过；同编号多批次去重；旧 ISBN 封面也跳过；占位图计入 skip；
     连续失败 max_abort 次刹车（防 ban）。"""
     covers_dir.mkdir(parents=True, exist_ok=True)
     have = _local_stems(covers_dir)
     rows = conn.execute(
-        "SELECT DISTINCT isbn, douban_id FROM books "
-        "WHERE douban_id IS NOT NULL AND douban_id != '' AND isbn IS NOT NULL AND isbn != '' "
-        "ORDER BY isbn").fetchall()
-    todo = [r for r in rows if r["isbn"] not in have]
+        "SELECT DISTINCT douban_id, isbn FROM books "
+        "WHERE douban_id IS NOT NULL AND douban_id != '' ORDER BY douban_id").fetchall()
+    ids = {}
+    for r in rows:
+        ids.setdefault(r["douban_id"], set()).add(r["isbn"])
+    todo = [did for did, isbns in ids.items()
+            if did not in have and not any(isbn in have for isbn in isbns if isbn)]
     rep = {"downloaded": 0, "skipped": 0, "placeholder": 0, "fail": 0,
-           "aborted": False, "already_have": len(rows) - len(todo), "todo": len(todo)}
+           "aborted": False, "already_have": len(ids) - len(todo), "todo": len(todo)}
     fail_run = 0
-    for r in todo[:limit]:
+    for did in todo[:limit]:
         try:
-            url = fetch_cover_url(r["douban_id"])
+            url = fetch_cover_url(did)
         except RuntimeError:
             rep["fail"] += 1; fail_run += 1
             if fail_run >= max_abort:
@@ -115,7 +181,7 @@ def localize_covers(conn, covers_dir, *, sleep_s=2.5, jitter=1.5, max_abort=6, l
             rep["placeholder"] += 1
             time.sleep(sleep_s + random.uniform(0, jitter))
             continue
-        dest = _cover_path(covers_dir, r["isbn"], url)
+        dest = _cover_path(covers_dir, did, url)
         try:
             dest.write_bytes(_download(url))
         except RuntimeError:
@@ -137,7 +203,7 @@ def main():
     ap.add_argument("--test", help="只打印单个 douban_id 的 og:image URL")
     ap.add_argument("--limit", type=int)
     ap.add_argument("--localize", action="store_true",
-                    help="有 douban_id 尚无本地封面的书，逐本 og:image→下载 raw/covers/<isbn>（限速、可断点续跑）")
+                    help="有 douban_id 尚无本地封面的书，逐本 og:image→下载 raw/covers/<douban_id>（限速、可断点续跑）")
     ap.add_argument("--db", default=str(DB_PATH))
     args = ap.parse_args()
     if args.test:
@@ -145,7 +211,7 @@ def main():
         return
     if not args.localize:
         ap.print_help()
-        print("\n提示：补图用 --localize；手工图直接按 <isbn>.jpg 放进 raw/covers/ 即可。")
+        print("\n提示：补图用 --localize；手工图按 <douban_id>.jpg 放进 raw/covers/ 即可。")
         return
     covers_dir = Path(args.db).resolve().parent / "raw" / "covers"
     conn = sqlite3.connect(args.db)

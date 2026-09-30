@@ -5,7 +5,7 @@ let charts = [];
 
 const cssVar = n => getComputedStyle(document.body).getPropertyValue(n).trim();
 
-// 封面真值 = 本地文件 raw/covers/<isbn>.*（/api/covers 拉一次集合作判据）；无文件退书名卡
+// 新封面按豆瓣编号命名；兼容旧版按 ISBN 命名的本地文件
 const coverSet = new Set();
 let coversLoaded = false;
 async function ensureCovers() {   // 幂等：首次加载后缓存，新抓封面后 refreshCovers() 重拉
@@ -13,7 +13,8 @@ async function ensureCovers() {   // 幂等：首次加载后缓存，新抓封�
   catch (e) { /* 拉不到就当没封面，退书名卡 */ }
 }
 async function refreshCovers() { coverSet.clear(); await ensureCovers(); }
-const coverSrc = b => (b.isbn && coverSet.has(b.isbn)) ? `/cover/${b.isbn}` : "";
+const coverSrc = b => b.douban_id && coverSet.has(b.douban_id) ? `/cover/${b.douban_id}`
+  : b.isbn && coverSet.has(b.isbn) ? `/cover/${b.isbn}` : "";
 const fmt = (v, d = 2) => (v == null ? "—" : Number(v).toFixed(d));
 const yearOf = s => ((s || "").match(/\b(19\d{2}|20\d{2})\b/) || ["—"])[0];
 const splitList = s => (s || "").split(/[,，、]/).map(x => x.trim()).filter(Boolean);
@@ -1097,16 +1098,14 @@ async function bookDetail(id) {
     ? `<a class="obs" href="https://book.douban.com/subject/${b.douban_id}/" target="_blank" rel="noopener">🌐 豆瓣</a>`
     : "";
   if (!coversLoaded) await ensureCovers();
-  const hasCover = b.isbn && coverSet.has(b.isbn);
-  const coverImg = hasCover
-    ? `<img class="d-cover" src="/cover/${b.isbn}" alt="${b.title} 封面">` : "";
-  const coverBtn = (b.douban_id && !hasCover)
-    ? `<button id="d-cover" class="ghost" type="button" title="从豆瓣拓封面并落盘">抓封面</button>` : "";
+  const src = coverSrc(b);
+  const coverImg = src
+    ? `<img class="d-cover" src="${src}" alt="${esc(b.title)} 封面">` : "";
   view.innerHTML = `
     <div class="detail">
       <section class="panel meta">
         ${coverImg}
-        <h2>${b.title}${dbk}${obs}${coverBtn}</h2>
+        <h2>${b.title}${dbk}${obs}</h2>
         <p class="muted" style="font-size:12px;margin:4px 0 10px">创建 ${esc(dateOf(b.created) || "—")} · 更新 ${esc(dateOf(b.last_modified) || "—")}</p>
         <form id="d-form">${BOOK_FIELDS}
           <div class="row"><button class="primary" type="submit">保存</button>
@@ -1119,20 +1118,6 @@ async function bookDetail(id) {
       </section>
       
     </div>`;
-  if (b.douban_id && !hasCover) {
-    $("#d-cover").onclick = async () => {
-      const btn = $("#d-cover");
-      btn.disabled = true; btn.textContent = "抓取中…";
-      try {
-        const r = await api(`/api/books/${id}/cover`, { method: "POST" });
-        if (r.has_cover) { await refreshCovers(); bookDetail(id); }   // 落盘→重渲染显示封面
-        else { btn.textContent = "豆瓣无封面"; btn.disabled = true; } // 占位图/无 isbn，人工补
-      } catch (e) {
-        btn.disabled = false; btn.textContent = "抓封面";
-        toast(e.message, true);
-      }
-    };
-  }
   const form = $("#d-form");
   const el = n => form.elements[n];
   el("title").value = b.title;
@@ -1148,11 +1133,68 @@ async function bookDetail(id) {
   el("importance").value = b.importance ?? "";
   el("status").value = b.status;
   el("read_at").value = dateOf(b.read_at);   // 库内 Notion 串 → 框里只显 yyyy-mm-dd
+  // 输入框和按钮并排成一行，整行宽度与其它字段一致
+  const attachAction = (name, btnId, text) => {
+    const input = el(name);
+    const label = input.closest("label");
+    input.id = `d-field-${name}`;
+    label.htmlFor = input.id;
+    label.classList.add("d-label");
+    const row = document.createElement("div");
+    row.className = "d-field";
+    label.after(row);
+    row.append(input);
+    row.insertAdjacentHTML("beforeend", `<button id="${btnId}" type="button">${text}</button>`);
+  };
+  attachAction("isbn", "d-lookup", "查豆瓣号");
+  attachAction("douban_id", "d-cover", "抓封面");
+  const lookup = $("#d-lookup");
+  const cover = $("#d-cover");
+  const updateActions = () => {
+    lookup.disabled = !el("isbn").value.trim() || !!el("douban_id").value.trim();
+    lookup.title = !el("isbn").value.trim() ? "请先填写并保存 ISBN"
+      : el("douban_id").value.trim() ? "已有豆瓣编号；如需重新查找，先清空编号并保存" : "按已保存的 ISBN 查找";
+    cover.disabled = !el("douban_id").value.trim() || !!src;
+    cover.title = !el("douban_id").value.trim() ? "请先填写并保存豆瓣编号"
+      : src ? "已有本地封面" : "按已保存的豆瓣编号抓封面";
+  };
+  el("isbn").addEventListener("input", updateActions);
+  el("douban_id").addEventListener("input", updateActions);
+  updateActions();
+  lookup.onclick = async () => {
+    if (el("isbn").value.trim() !== (b.isbn || "")) {
+      toast("请先保存 ISBN，再查豆瓣编号", true);
+      return;
+    }
+    lookup.disabled = true;
+    try {
+      const result = await api(`/api/books/${id}/douban-id`, { method: "POST" });
+      await bookDetail(id);
+      toast(`已核对 ISBN，豆瓣编号 ${result.douban_id} 已保存`);
+    } catch (err) { updateActions(); toast(err.message, true); }
+  };
+  cover.onclick = async () => {
+    if (el("douban_id").value.trim() !== (b.douban_id || "")) {
+      toast("请先保存豆瓣编号，再抓封面", true);
+      return;
+    }
+    cover.disabled = true; cover.textContent = "抓取中…";
+    try {
+      const result = await api(`/api/books/${id}/cover`, { method: "POST" });
+      if (result.has_cover) { await refreshCovers(); await bookDetail(id); }
+      else { cover.textContent = "豆瓣无封面"; cover.disabled = true; }
+    } catch (err) {
+      cover.textContent = "抓封面";
+      updateActions();
+      toast(err.message, true);
+    }
+  };
   form.onsubmit = async e => {
     e.preventDefault();
     try {
       const payload = formPayload(form);
       await api(`/api/books/${id}`, { method: "PUT", body: JSON.stringify(payload) });
+      await bookDetail(id); // 新填 ISBN/豆瓣号后露出相应的独立按钮
       toast("已保存");
     } catch (err) { toast(err.message, true); }
   };

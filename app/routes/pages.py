@@ -23,7 +23,8 @@ def index(request: Request):
             v = request.app.state.version
         return f"{url}?v={v}{quote}"
 
-    html = re.sub(r'(/static/[^"\'?]+)(")', stamp, html)
+    # 忽略 index.html 里手写的 ?v=xx，统一换成 mtime 指纹
+    html = re.sub(r'(/static/[^"\'?]+)(?:\?[^"\']*)?(")', stamp, html)
     return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
 
