@@ -834,65 +834,61 @@ function renderMulti(el, b, dim) {
   };
   draw();
 }
-// 国籍弹层：和分类一个模子——模糊匹配 + 候选勾选 + Enter 新建；已有作者的国籍在打开时
-// 就是勾上的（库里按作者带出）。唯一差别：国籍挂在作者身上（跨书共享），提交时把
-// 勾选集合换算成「作者→国籍」映射发 author-nationalities 接口（见 natMapFor）。
+// 国籍弹层：国籍挂在作者身上（跨书共享、一作者可多国籍），按作者分组、各勾各的。
+// 搜索框过滤候选，勾哪位作者的就改哪位；回车新建落在「当前作者」（点组切换）身上。
+const natUnion = m => [...new Set(Object.values(m).flat().filter(Boolean))];
 function renderNationality(el, b) {
   const aus = b.authors || [];
   if (!aus.length) {
     el.innerHTML = '<div class="pop-empty">这本书没作者——国籍跟着作者走，先去作者列补人。</div>';
     return;
   }
-  el.innerHTML = `<input class="pop-q" placeholder="模糊匹配 · Enter 添加新值" autocomplete="off"><div class="pop-list"></div>`;
+  let map = aus.map(n => [...((b.author_nationalities || {})[n] || [])]);
+  let active = 0;                                   // 回车新建落在第几位作者
+  const named = () => Object.fromEntries(aus.map((n, i) => [n, map[i] || []]));
+  el.innerHTML = `<input class="pop-q" placeholder="模糊匹配 · Enter 加给当前作者" autocomplete="off"><div class="pop-list"></div>`;
   const q = el.querySelector(".pop-q"), list = el.querySelector(".pop-list");
-  const toggle = (v, on) => {
-    const S = new Set(b.nationalities || []);
-    on ? S.add(v) : S.delete(v);
-    b.nationalities = [...S];               // 即时回显（b 是 rowItems/draft 共享引用；服务端回来后以真相为准）
-    commitNat(b, natMapFor(b, S));
-  };
   const draw = () => {
     const s = q.value.trim().toLowerCase();
-    const cur = b.nationalities || [];
-    const item = (n, on) => `<label class="pop-item"><input type="checkbox" ${on ? "checked" : ""}><span>${esc(n)}</span></label>`;
-    const sel = cur.filter(n => !s || n.toLowerCase().includes(s));                 // 已选置顶
-    const rest = (FACETS.nationalities || []).filter(x => !cur.includes(x) && (!s || x.toLowerCase().includes(s)));
-    list.innerHTML = sel.map(n => item(n, true)).join("") + rest.map(n => item(n, false)).join("")
-      || `<div class="pop-empty">无匹配 · 按 Enter 新建「${esc(q.value.trim())}」</div>`;
+    const hit = x => !s || x.toLowerCase().includes(s);
+    const item = (i, v, on) =>
+      `<label class="pop-item"><input type="checkbox" ${on ? "checked" : ""} data-i="${i}"><span>${esc(v)}</span></label>`;
+    list.innerHTML = aus.map((n, i) => {
+      const cur = (map[i] || []).filter(hit);                        // 已选置顶
+      const rest = (FACETS.nationalities || []).filter(x => !map[i].includes(x) && hit(x));
+      const body = cur.map(v => item(i, v, true)).join("") + rest.map(v => item(i, v, false)).join("")
+        || `<div class="pop-empty">无匹配 · 按 Enter 新建「${esc(q.value.trim())}」</div>`;
+      return `<div class="pop-grp${i === active ? " on" : ""}" data-i="${i}">
+        <div class="pop-grp-h">${esc(n)}${i === active ? '<span class="dull"> · 回车加到这</span>' : ""}</div>${body}</div>`;
+    }).join("");
     list.querySelectorAll(".pop-item input").forEach(cb => cb.onchange = () => {
-      toggle(cb.parentElement.querySelector("span").textContent, cb.checked);
-      draw();   // 弹层保持打开可连续勾，同分类
+      const i = +cb.dataset.i;
+      const set = new Set(map[i]);
+      const v = cb.parentElement.querySelector("span").textContent;
+      cb.checked ? set.add(v) : set.delete(v);
+      map[i] = [...set];
+      active = i;
+      commitNat(b, named());                       // 每勾一下即落账；弹层保持打开可连续勾
+      draw();
     });
+    list.querySelectorAll(".pop-grp").forEach(g => g.onmousedown = () => { active = +g.dataset.i; });
   };
   q.oninput = draw;
   q.onkeydown = e => {
     if (e.key !== "Enter") return;
     const n = q.value.trim();
     if (!n) return;
-    toggle(n, true);
+    map[active] = [...new Set([...(map[active] || []), n])];
+    commitNat(b, named());
     q.value = "";
     draw();
   };
   draw();
 }
-// 勾选集合 → 作者→国籍 映射：被取消的值清掉原主人；新值发给第一个没国籍的作者，
-// 单作者书直接顶（那就是换国籍）；多作者没空位时多余的值落空（重画时不显示，如实反映）。
-function natMapFor(b, S) {
-  const aus = b.authors || [];
-  const cur = n => (b.author_nationalities || {})[n] || "";
-  const map = Object.fromEntries(aus.map(n => [n, cur(n)]));
-  for (const n of aus) if (map[n] && !S.has(map[n])) map[n] = "";
-  for (const v of S) {
-    if (aus.some(n => map[n] === v)) continue;
-    const free = aus.find(n => !map[n]);
-    if (free !== undefined || aus.length === 1) map[free ?? aus[0]] = v;
-  }
-  return map;
-}
 async function commitNat(b, map) {
   if (b.id === -1) {
     draft.author_nationalities = map;
-    draft.nationalities = [...new Set(Object.values(map).filter(Boolean))];
+    draft.nationalities = natUnion(map);
     showNewRow();
     return;
   }
@@ -914,7 +910,10 @@ async function commitDim(b, dim, value) {
   }
   try {
     const fresh = await api(`/api/books/${b.id}`, { method: "PUT", body: JSON.stringify({ [dim]: value }) });
-    Object.assign(b, { [dim]: value }, { nationalities: fresh.nationalities });  // 作者变了国籍跟着动
+    // 作者变了国籍跟着动：书级并集和「作者→国籍列表」两份都换成服务端真相，
+    // 否则国籍弹层还会拿老作者的国籍开价
+    Object.assign(b, { [dim]: value }, { nationalities: fresh.nationalities },
+                             { author_nationalities: fresh.author_nationalities });
     paintRow(b);
   } catch (e) { toast(e.message, true); }
 }
@@ -966,9 +965,8 @@ const newDraft = () => ({ id: -1, title: "", authors: [], nationalities: [], aut
 // 删掉的作者出账
 function syncDraftAuthors(authors, prev, known) {
   const map = {};
-  for (const n of authors) map[n] = (n in prev) ? prev[n] : (known[n] || "");
-  return { author_nationalities: map,
-           nationalities: [...new Set(Object.values(map).filter(Boolean))] };
+  for (const n of authors) map[n] = [...((n in prev) ? prev[n] : (known[n] || []))];
+  return { author_nationalities: map, nationalities: natUnion(map) };
 }
 
 function toggleNewRow() {
@@ -1064,11 +1062,12 @@ async function saveDraft() {
   if (!payload.title) return toast("书名必填", true);
   try {
     const newId = await api("/api/books", { method: "POST", body: JSON.stringify(payload) });
-    // 草稿里手填过且与库不同的国籍（新作者库里本就没有）走列表行的国籍接口补写；
-    // 与库一致的不重发——作者行跨书共享，别白刷一遍 last_modified
+    // 草稿里与库不一致的国籍（新作者库里本就没有；老作者被清空也算）走列表行的接口补写；
+    // 一致的不重发——作者行跨书共享，别白刷一遍 last_modified
     const known = (FACETS || {}).author_nationalities || {};
+    const key = a => JSON.stringify([...(a || [])].sort());   // 顺序无关的集合比较
     const natPatch = Object.fromEntries(Object.entries(draft.author_nationalities)
-      .filter(([n, v]) => v && v !== (known[n] || "")));
+      .filter(([n, v]) => key(v) !== key(known[n])));
     let natFail = false;
     if (Object.keys(natPatch).length) {
       try { await api(`/api/books/${newId}/author-nationalities`,

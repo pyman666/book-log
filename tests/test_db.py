@@ -42,6 +42,41 @@ def test_legacy_platform_id_migrated_to_m2m(tmp_path):
     assert get_book(conn, bid)["platforms"] == ["京东"]
 
 
+def test_legacy_single_nationality_column_migrates_to_m2m(tmp_path):
+    """旧库 authors.nationality 单值列 → author_nationalities 关联表：
+    有值的搬过去、空串/NULL 不搬（没国籍就该是「没有行」），然后删列；再跑一次不重复。"""
+    conn = make(tmp_path)
+    conn.execute("ALTER TABLE authors ADD COLUMN nationality TEXT")   # 模拟旧库
+    conn.execute("INSERT INTO authors (name, nationality) VALUES ('余华', '中国')")
+    conn.execute("INSERT INTO authors (name, nationality) VALUES ('空白', '')")
+    conn.execute("INSERT INTO authors (name, nationality) VALUES ('空值', NULL)")
+    conn.commit()
+    init_db(conn)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(authors)")}
+    assert "nationality" not in cols
+    assert dict(conn.execute(
+        "SELECT a.name, an.nationality FROM authors a "
+        "LEFT JOIN author_nationalities an ON an.author_id=a.id ORDER BY a.name").fetchall()) \
+        == {"余华": "中国", "空白": None, "空值": None}
+    init_db(conn)                                                     # 幂等：不重复搬
+    assert conn.execute("SELECT COUNT(*) FROM author_nationalities").fetchone()[0] == 1
+
+
+def test_author_can_have_multiple_nationalities(tmp_path):
+    conn = make(tmp_path)
+    bid = save_book(conn, B(title="双籍", authors=["某人"]))
+    aid = conn.execute("SELECT id FROM authors WHERE name='某人'").fetchone()[0]
+    conn.executemany("INSERT INTO author_nationalities (author_id, nationality) VALUES (?, ?)",
+                     [(aid, "中国"), (aid, "法国")])
+    conn.commit()
+    b = get_book(conn, bid)
+    assert b["author_nationalities"] == {"某人": ["中国", "法国"]}
+    assert b["nationalities"] == ["中国", "法国"]
+    assert list_books(conn, nationality="法国")["total"] == 1
+    assert dbmod.facets(conn)["author_nationalities"] == {"某人": ["中国", "法国"]}
+    assert {x["key"] for x in stats_group(conn, "nationality")} == {"中国", "法国"}
+
+
 def test_read_at_has_no_default(tmp_path):
     """写入侧不设默认：回填 created 会把「只买没读」伪造成读过。"""
     conn = make(tmp_path)

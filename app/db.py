@@ -5,7 +5,11 @@ from contextlib import contextmanager
 from datetime import datetime
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, chinese INTEGER, nationality TEXT);
+CREATE TABLE IF NOT EXISTS authors (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, chinese INTEGER);
+CREATE TABLE IF NOT EXISTS author_nationalities (
+  author_id INTEGER REFERENCES authors(id) ON DELETE CASCADE,
+  nationality TEXT NOT NULL,
+  PRIMARY KEY (author_id, nationality));   -- 国籍挂作者，一作者可多国籍（存量库由单值列迁入）
 CREATE TABLE IF NOT EXISTS publishers (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS platforms (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
@@ -134,10 +138,13 @@ def init_db(conn):
     if "file_path" in cols:  # 笔记文件名改为按命名法推导（app/notes.py），不再入库：
         conn.execute("ALTER TABLE books DROP COLUMN file_path")   # 存了就要 Sync，Sync 就会造存根
     acols = {r[1] for r in conn.execute("PRAGMA table_info(authors)")}
-    if "chinese" not in acols:  # 作者国籍：数据保留（LLM 判定代码已下线），手工走 PUT /api/authors/nationality
+    if "chinese" not in acols:  # 作者国籍：数据保留（LLM 判定代码已下线），手工走 PUT /api/books/{id}/author-nationalities
         conn.execute("ALTER TABLE authors ADD COLUMN chinese INTEGER")
-    if "nationality" not in acols:
-        conn.execute("ALTER TABLE authors ADD COLUMN nationality TEXT")
+    if "nationality" in acols:  # 单值列 → author_nationalities 关联表（一个作者可多国籍），搬完删列
+        conn.execute("INSERT OR IGNORE INTO author_nationalities (author_id, nationality) "
+                     "SELECT id, nationality FROM authors "
+                     "WHERE nationality IS NOT NULL AND nationality != ''")
+        conn.execute("ALTER TABLE authors DROP COLUMN nationality")
     if "platform_id" in cols:   # 平台 1:1 → 多对多：旧列数据搬进 book_platforms 后删列
         conn.execute("INSERT OR IGNORE INTO book_platforms (book_id, platform_id) "
                      "SELECT id, platform_id FROM books WHERE platform_id IS NOT NULL")
@@ -207,6 +214,20 @@ def _names(conn, table, key, dim_table, fk, bid):
         f"WHERE j.book_id = ? ORDER BY d.name", (bid,))]
 
 
+def _author_nat_map(conn, bid):
+    """一本书 → {作者名: [国籍...]}。没国籍的作者给空列表（前端据此留空待填）。"""
+    m = {}
+    for name, nat in conn.execute(
+            "SELECT a.name, an.nationality FROM book_authors ba "
+            "JOIN authors a ON a.id=ba.author_id "
+            "LEFT JOIN author_nationalities an ON an.author_id=a.id "
+            "WHERE ba.book_id=? ORDER BY an.nationality", (bid,)):
+        m.setdefault(name, [])
+        if nat is not None:
+            m[name].append(nat)
+    return m
+
+
 def _replace_m2m(conn, bid, b):
     for table, key, dim_table, fk in _M2M:
         conn.execute(f"DELETE FROM {table} WHERE book_id = ?", (bid,))
@@ -273,14 +294,13 @@ def _shape(conn, row):
         "last_modified": row["last_modified"],
         "douban_id": row["douban_id"],
         "authors": _names(conn, "book_authors", "authors", "authors", "author_id", bid),
+        # 书级国籍：该书各作者国籍的去重并集（一作者可多国籍，因此本身就是列表）
         "nationalities": [r[0] for r in conn.execute(
-            "SELECT DISTINCT a.nationality FROM book_authors ba JOIN authors a ON a.id=ba.author_id "
-            "WHERE ba.book_id=? AND a.nationality IS NOT NULL AND a.nationality != '' "
-            "ORDER BY a.nationality", (bid,))],
-        # 作者 → 国籍 映射：书单页国籍弹层按作者逐个编辑（作者行跨书共享，改动全局生效）
-        "author_nationalities": {r[0]: r[1] for r in conn.execute(
-            "SELECT a.name, a.nationality FROM book_authors ba "
-            "JOIN authors a ON a.id=ba.author_id WHERE ba.book_id=?", (bid,))},
+            "SELECT DISTINCT an.nationality FROM book_authors ba JOIN authors a ON a.id=ba.author_id "
+            "JOIN author_nationalities an ON an.author_id = a.id "
+            "WHERE ba.book_id=? ORDER BY an.nationality", (bid,))],
+        # 作者 → 国籍列表 映射：书单页国籍弹层按作者逐个编辑（作者行跨书共享，改动全局生效）
+        "author_nationalities": _author_nat_map(conn, bid),
         "publishers": _names(conn, "book_publishers", "publishers", "publishers", "publisher_id", bid),
         "categories": _names(conn, "book_categories", "categories", "categories", "category_id", bid),
         "platforms": _names(conn, "book_platforms", "platforms", "platforms", "platform_id", bid),
@@ -348,7 +368,8 @@ def list_books(conn, q=None, category=None, author=None, publisher=None, platfor
         args.append(author)
     if nationality:
         where.append("EXISTS (SELECT 1 FROM book_authors ba JOIN authors a ON a.id = ba.author_id "
-                     "WHERE ba.book_id = b.id AND a.nationality = ?)")
+                     "JOIN author_nationalities an ON an.author_id = a.id "
+                     "WHERE ba.book_id = b.id AND an.nationality = ?)")
         args.append(nationality)
     if publisher:
         where.append("EXISTS (SELECT 1 FROM book_publishers bp JOIN publishers p ON p.id = bp.publisher_id "
@@ -391,14 +412,20 @@ def facets(conn):
         "SELECT DISTINCT p.name FROM platforms p JOIN book_platforms bp ON bp.platform_id = p.id "
         "ORDER BY p.name")]
     nats = [r[0] for r in conn.execute(
-        "SELECT DISTINCT a.nationality FROM authors a JOIN book_authors ba ON ba.author_id=a.id "
-        "WHERE a.nationality IS NOT NULL AND a.nationality != '' AND a.nationality != '未知' "
-        "ORDER BY a.nationality")]
-    # 作者→国籍映射（同口径排除空与「未知」占位）：书单页新书行填老作者时顺带带出国籍，
+        "SELECT DISTINCT an.nationality FROM authors a JOIN book_authors ba ON ba.author_id=a.id "
+        "JOIN author_nationalities an ON an.author_id=a.id "
+        "WHERE an.nationality != '' AND an.nationality != '未知' "
+        "ORDER BY an.nationality")]
+    # 作者→国籍列表 映射（同口径排除空与「未知」占位）：书单页新书行填老作者时顺带带出国籍，
     # 没国籍的（新作者）留空手填，不用再去国籍列挨个点
-    author_nat = {r[0]: r[1] for r in conn.execute(
-        "SELECT a.name, a.nationality FROM authors a JOIN book_authors ba ON ba.author_id=a.id "
-        "WHERE a.nationality IS NOT NULL AND a.nationality != '' AND a.nationality != '未知'")}
+    author_nat = {}
+    for name, nat in conn.execute(
+            "SELECT DISTINCT a.name, an.nationality FROM authors a "
+            "JOIN book_authors ba ON ba.author_id=a.id "
+            "JOIN author_nationalities an ON an.author_id=a.id "
+            "WHERE an.nationality != '' AND an.nationality != '未知' "
+            "ORDER BY an.nationality"):
+        author_nat.setdefault(name, []).append(nat)
     years = [r[0] for r in conn.execute(
         f"SELECT DISTINCT year_of(created) FROM books "
         f"WHERE year_of(created) IS NOT NULL ORDER BY 1 DESC")]
@@ -434,11 +461,13 @@ def stats_group(conn, by, agg="count"):
                   "JOIN book_authors ba ON ba.book_id = b.id JOIN authors a ON a.id = ba.author_id",
         "publisher": "SELECT b.id, b.price, b.rating, p.name AS key FROM books b "
                      "JOIN book_publishers bp ON bp.book_id = b.id JOIN publishers p ON p.id = bp.publisher_id",
-        # 国籍：按作者国名（authors.nationality，ensure_author_meta 填充）；
-        # 未判定/空的归「未标注」；多国籍书在每个国家各计一次（同 author 维度语义）
+        # 国籍：按作者国名（author_nationalities 表，弹层手填）；
+        # 未判定/没填的（LEFT JOIN 出 NULL）归「未标注」；
+        # 一作者多国籍、多作者的书在每个国家各计一次（同 author 维度语义）
         "nationality": "SELECT b.id, b.price, b.rating, "
-                       "COALESCE(NULLIF(a.nationality, ''), '未标注') AS key FROM books b "
-                       "JOIN book_authors ba ON ba.book_id=b.id JOIN authors a ON a.id=ba.author_id",
+                       "COALESCE(NULLIF(an.nationality, ''), '未标注') AS key FROM books b "
+                       "JOIN book_authors ba ON ba.book_id=b.id JOIN authors a ON a.id=ba.author_id "
+                       "LEFT JOIN author_nationalities an ON an.author_id=a.id",
         "year": "SELECT b.id, b.price, b.rating, year_of(b.created) AS key FROM books b",
         "rating": "SELECT b.id, b.price, b.rating, b.rating AS key FROM books b",
     }[by]

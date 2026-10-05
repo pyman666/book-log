@@ -23,6 +23,7 @@ class BookIn(BaseModel):
 
 
 class AuthorNatIn(BaseModel):
-    """按作者名批量设置国籍：{作者名: 国籍}（空串=清空）。作者行跨书共享，改动全局生效。"""
-    nationalities: Dict[str, str]
+    """按作者名批量设置国籍：{作者名: [国籍...]}（空列表=清空；一作者可多国籍）。
+    作者行跨书共享，改动全局生效。"""
+    nationalities: Dict[str, List[str]]
 

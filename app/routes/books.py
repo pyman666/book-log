@@ -71,15 +71,18 @@ def update_author_nationalities(payload: AuthorNatIn, request: Request, bid: int
     with conn_of(request) as conn:
         if not conn.execute("SELECT id FROM books WHERE id = ?", (bid,)).fetchone():
             raise HTTPException(404, "不存在")
-        book_authors = {r[0] for r in conn.execute(
-            "SELECT a.name FROM book_authors ba JOIN authors a ON a.id=ba.author_id "
+        book_authors = {r[0]: r[1] for r in conn.execute(
+            "SELECT a.name, a.id FROM book_authors ba JOIN authors a ON a.id=ba.author_id "
             "WHERE ba.book_id = ?", (bid,))}
-        for name, nat in payload.nationalities.items():
+        for name, nats in payload.nationalities.items():
             name = (name or "").strip()
             if name not in book_authors:
                 continue
-            conn.execute("UPDATE authors SET nationality = ? WHERE name = ?",
-                         (nat.strip() or None, name))
+            aid = book_authors[name]
+            conn.execute("DELETE FROM author_nationalities WHERE author_id = ?", (aid,))
+            conn.executemany(
+                "INSERT OR IGNORE INTO author_nationalities (author_id, nationality) VALUES (?, ?)",
+                [(aid, v) for v in dict.fromkeys((x or "").strip() for x in nats) if v])
         conn.execute("UPDATE books SET last_modified = ? WHERE id = ?", (dbmod.now_stamp(), bid))
         conn.commit()
         return dbmod.get_book(conn, bid)

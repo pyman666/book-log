@@ -122,14 +122,22 @@ def test_group(client):
     assert client.get("/api/stats/group", params={"by": "year", "agg": "bogus"}).status_code == 400
 
 
+def _set_nats(conn, name, *nats):
+    """按作者名写国籍（author_nationalities 关联表）：整组覆盖，和弹层接口同口径。"""
+    aid = conn.execute("SELECT id FROM authors WHERE name = ?", (name,)).fetchone()[0]
+    conn.execute("DELETE FROM author_nationalities WHERE author_id = ?", (aid,))
+    conn.executemany("INSERT INTO author_nationalities (author_id, nationality) VALUES (?, ?)",
+                     [(aid, n) for n in nats])
+
+
 def test_group_nationality(client):
     from app import db as dbmod
     client.post("/api/books", json={"title": "甲", "authors": ["余华"], "price": 10})
     client.post("/api/books", json={"title": "乙", "authors": ["加缪"], "price": -4})
     client.post("/api/books", json={"title": "丙"})   # 无作者：不进国籍维度（JOIN）
     with dbmod.db_conn(client.app.state.db_path) as c:
-        c.execute("UPDATE authors SET nationality='中国' WHERE name='余华'")
-        c.execute("UPDATE authors SET nationality='法国' WHERE name='加缪'")
+        _set_nats(c, "余华", "中国")
+        _set_nats(c, "加缪", "法国")
         c.commit()
     g = {x["key"]: x["value"] for x in
          client.get("/api/stats/group", params={"by": "nationality"}).json()}
@@ -137,7 +145,7 @@ def test_group_nationality(client):
     gm = {x["key"]: x["value"] for x in
           client.get("/api/stats/group", params={"by": "nationality", "agg": "sum_price"}).json()}
     assert gm["中国"] == 10 and gm["法国"] == -4
-    # 未判定（nationality 为 NULL）归入「未标注」
+    # 未判定（一条国籍都没有）归入「未标注」
     client.post("/api/books", json={"title": "丁", "authors": ["未判定作者"]})
     g2 = {x["key"]: x["value"] for x in
           client.get("/api/stats/group", params={"by": "nationality"}).json()}
@@ -151,8 +159,8 @@ def test_list_nationality_filter(client):
     client.post("/api/books", json={"title": "乙", "authors": ["加缪"],
                                     "created": "May 2, 2023 9:00 AM"})
     with dbmod.db_conn(client.app.state.db_path) as c:
-        c.execute("UPDATE authors SET nationality='中国' WHERE name='余华'")
-        c.execute("UPDATE authors SET nationality='法国' WHERE name='加缪'")
+        _set_nats(c, "余华", "中国")
+        _set_nats(c, "加缪", "法国")
         c.commit()
     d = client.get("/api/books", params={"nationality": "中国"}).json()
     assert d["total"] == 1 and d["items"][0]["title"] == "甲"
@@ -163,17 +171,55 @@ def test_list_nationality_filter(client):
     assert client.get("/api/books", params={"year": 2024}).json()["total"] == 1
 
 
+def test_author_multi_nationality(client):
+    """一个作者可挂多个国籍：_shape 给列表，两个国名都能筛到、都进分布图。"""
+    bid = client.post("/api/books", json={"title": "双籍书", "authors": ["某人"], "price": 7}).json()
+    with dbmod.db_conn(client.app.state.db_path) as c:
+        _set_nats(c, "某人", "中国", "法国")
+        c.commit()
+    b = client.get(f"/api/books/{bid}").json()
+    assert b["author_nationalities"] == {"某人": ["中国", "法国"]}
+    assert b["nationalities"] == ["中国", "法国"]          # 书级并集，按国名排序
+    for nat in ("中国", "法国"):
+        assert client.get("/api/books", params={"nationality": nat}).json()["total"] == 1
+    g = {x["key"]: x["value"] for x in
+         client.get("/api/stats/group", params={"by": "nationality"}).json()}
+    assert g == {"中国": 1, "法国": 1}                      # 两国各计一次
+    f = client.get("/api/facets").json()
+    assert f["author_nationalities"] == {"某人": ["中国", "法国"]}
+    assert f["nationalities"] == ["中国", "法国"]
+
+
+def test_put_author_nationalities(client):
+    """弹层接口的值是列表：整组覆盖（不追加），空列表=清空；不在这本书作者里的人名不碰。"""
+    bid = client.post("/api/books", json={"title": "改国籍", "authors": ["甲", "乙"]}).json()
+    r = client.put(f"/api/books/{bid}/author-nationalities",
+                   json={"nationalities": {"甲": ["中国", "美国"], "乙": ["法国"], "外人": ["德国"]}})
+    assert r.status_code == 200
+    b = r.json()
+    assert b["author_nationalities"] == {"甲": ["中国", "美国"], "乙": ["法国"]}
+    assert b["nationalities"] == ["中国", "法国", "美国"]
+    client.put(f"/api/books/{bid}/author-nationalities", json={"nationalities": {"甲": ["日本"]}})
+    assert client.get(f"/api/books/{bid}").json()["author_nationalities"]["甲"] == ["日本"]
+    client.put(f"/api/books/{bid}/author-nationalities", json={"nationalities": {"甲": []}})
+    assert client.get(f"/api/books/{bid}").json()["author_nationalities"]["甲"] == []
+    assert client.get(f"/api/books/{bid}").json()["nationalities"] == ["法国"]   # 甲清空后只剩乙
+
+
 def test_spectrum_excludes_placeholder_author(client):
     """占位作者「其它」(chinese=0, 54 本垃圾桶) 不得污染语言轴的"翻译"计数。"""
     from app import db as dbmod
     client.post("/api/books", json={"title": "占位书", "authors": ["其它"]})
     with dbmod.db_conn(client.app.state.db_path) as c:
-        c.execute("UPDATE authors SET chinese=0, nationality='未知' WHERE name='其它'")
+        c.execute("UPDATE authors SET chinese=0 WHERE name='其它'")
+        _set_nats(c, "其它", "未知")
         c.commit()
     sp = {a["axis"]: {s["key"]: s["value"] for s in a["segments"]}
           for a in client.get("/api/stats/spectrum").json()}
     assert sp.get("语言", {}) == {}                      # 语言轴不计占位作者
     assert sp["读完没"]["未读"] == 1                     # 其它轴照常
+    # 「未知」是占位垃圾桶，不进国籍筛选选项
+    assert "未知" not in client.get("/api/facets").json()["nationalities"]
 
 
 def test_douban_id(client):

@@ -323,6 +323,13 @@ td input.dt.has { background-image: none; padding-right: 6px; }
 .pop-item input { accent-color: var(--series-1); margin: 0; }
 .pop-item span { overflow: hidden; text-overflow: ellipsis; }
 .pop-empty { padding: 6px 8px; color: var(--muted); }
+/* 国籍弹层按作者分组：组头=作者名，当前组（回车新建落这）高亮 */
+.pop-grp { margin-top: 4px; }
+.pop-grp-h { padding: 5px 8px 1px; font-size: 11px; font-weight: 600; color: var(--muted);
+  border-top: 1px solid var(--border); }
+.pop-grp:first-child { margin-top: 0; }
+.pop-grp:first-child .pop-grp-h { border-top: 0; padding-top: 1px; }
+.pop-grp.on .pop-grp-h { color: var(--series-1); }
 
 /* ---------- 详情 ---------- */
 .detail { display: grid; grid-template-columns: 330px 1fr; gap: 14px; }
