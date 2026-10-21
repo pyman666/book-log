@@ -55,9 +55,9 @@ def test_new_book_row_reuses_table_controls():
     js = _js()
     assert "book-form" not in js, "底部表单面板又回来了？新书行应该插在表格第一行"
     block = re.search(r"function newBookRow\(\) \{.*?\n\}", js, re.S).group(0)
-    # 作者/分类/出版社/平台走跟列表行同一个 dimBtn 弹层（均为多选），国籍按钮同 markup
+    # 作者/分类/标签/出版社/平台走跟列表行同一个 dimBtn 弹层（均为多选），国籍按钮同 markup
     dims = set(re.findall(r'dimBtn\(d,\s*"(\w+)"', block))
-    assert dims == {"authors", "categories", "publishers", "platforms"}
+    assert dims == {"authors", "categories", "tags", "publishers", "platforms"}
     assert 'data-dim="nationality"' in block
     # 列表列没有的四个字段不能丢
     for name in ("isbn", "douban_id", "rating", "importance"):

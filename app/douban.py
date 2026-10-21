@@ -68,29 +68,79 @@ def _search_first_subject(key: str, timeout: float) -> str | None:
 
 def lookup_subject_by_isbn(isbn: str, timeout: float = 12) -> str:
     """豆瓣搜索 ISBN 取第一条，再核对条目页 ISBN；不能把相近版本当成同一本。"""
-    key = re.sub(r"[\s-]", "", isbn or "").upper()
+    _key, subject_id, _book = _verified_book(isbn, timeout)
+    return subject_id
+
+
+def lookup_book_by_isbn(isbn: str, timeout: float = 12) -> dict:
+    """按 ISBN 补全新书表单：豆瓣号 + 书名 / 作者 / 出版社。
+
+    核对口径与 lookup_subject_by_isbn 完全一致：搜索第一条不算数，条目页 ISBN
+    必须与输入吻合——宁可不补，也不能把《某书》第二版的作者安到这一版上。
+    """
+    key, subject_id, book = _verified_book(isbn, timeout)
+    return {"douban_id": subject_id, "isbn": key,
+            "title": str(book.get("name") or "").strip(),
+            "authors": _ld_names(book.get("author")),
+            "publishers": _ld_names(book.get("publisher"))}
+
+
+def _verified_book(isbn: str, timeout: float):
+    """ISBN → (规范化 key, subject 号, 条目页 Book 条目)；ISBN 对不上就抛 ValueError。"""
+    key, subject_id = _subject_for_isbn(isbn, timeout)
+    book = _page_book(_subject_page(subject_id, timeout), subject_id)
+    found = _normalize_digits(book["isbn"])
+    if found != key:
+        raise ValueError(f"豆瓣搜索结果 {subject_id} 的 ISBN 是 {found}，与书目不一致，未保存豆瓣号")
+    return key, subject_id, book
+
+
+def _normalize_digits(isbn) -> str:
+    return re.sub(r"[\s-]", "", str(isbn or "")).upper()
+
+
+def _subject_for_isbn(isbn: str, timeout: float) -> tuple[str, str]:
+    """ISBN → (规范化的 key, 豆瓣 subject 号)。搜不到时带上校验位提示。"""
+    key = _normalize_digits(isbn)
     if not re.fullmatch(r"(?:\d{10}|\d{9}X|\d{13})", key):
         raise ValueError("ISBN 须为 10 或 13 位")
     subject_id = _search_first_subject(key, timeout)
     if not subject_id:
         hint = "" if _isbn_checksum_ok(key) else "（该 ISBN 校验位不对，可能录错了）"
         raise ValueError(f"豆瓣搜不到 ISBN {key}{hint}")
-    r = _get_page(f"https://book.douban.com/subject/{subject_id}/", timeout)
-    page_isbns = []
-    for script in BOOK_JSON.findall(r.text):
+    return key, subject_id
+
+
+def _subject_page(subject_id: str, timeout: float):
+    return _get_page(f"https://book.douban.com/subject/{subject_id}/", timeout).text
+
+
+def _page_book(page: str, subject_id: str) -> dict:
+    """条目页唯一的 Book 条目；没有可核对的 ISBN 就拒绝（不猜版本）。"""
+    books = []
+    for script in BOOK_JSON.findall(page):
         try:
             data = json.loads(script)
         except json.JSONDecodeError as e:
             raise RuntimeError("豆瓣图书元数据无法解析") from e
         entries = data if isinstance(data, list) else [data]
-        page_isbns.extend(entry.get("isbn") for entry in entries
-                          if isinstance(entry, dict) and entry.get("@type") == "Book")
-    if len(page_isbns) != 1 or not isinstance(page_isbns[0], str):
+        books.extend(e for e in entries if isinstance(e, dict) and e.get("@type") == "Book")
+    isbns = [b.get("isbn") for b in books]
+    if len(isbns) != 1 or not isinstance(isbns[0], str):
         raise ValueError(f"豆瓣条目 {subject_id} 没有可核对的 ISBN，未保存豆瓣号")
-    found = re.sub(r"[\s-]", "", page_isbns[0]).upper()
-    if found != key:
-        raise ValueError(f"豆瓣搜索结果 {subject_id} 的 ISBN 是 {found}，与书目不一致，未保存豆瓣号")
-    return subject_id
+    return books[0]
+
+
+def _ld_names(v) -> list:
+    """ld+json 的 author/publisher：字符串、单个对象、对象数组三种写法都收。"""
+    items = v if isinstance(v, list) else [v]
+    out = []
+    for item in items:
+        name = item.get("name") if isinstance(item, dict) else item
+        name = str(name or "").strip()
+        if name and name not in out:
+            out.append(name)
+    return out
 
 
 def fetch_cover_url(douban_id: str, timeout: float = 12) -> str:

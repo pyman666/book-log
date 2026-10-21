@@ -18,14 +18,14 @@ def list_books(request: Request, q: Optional[str] = None, category: Optional[str
                platform: Optional[str] = None, status: Optional[str] = None,
                nationality: Optional[str] = None, min_price: Optional[float] = None,
                max_price: Optional[float] = None, min_rating: Optional[int] = None,
-               year: Optional[int] = None, sort: str = "default", desc: bool = False,
-               page: int = 1, page_size: int = Query(50, le=500)):
+               year: Optional[int] = None, tag: Optional[str] = None, sort: str = "default",
+               desc: bool = False, page: int = 1, page_size: int = Query(50, le=500)):
     with conn_of(request) as conn:
         data = dbmod.list_books(conn, q=q, category=category, author=author,
                                 publisher=publisher, platform=platform, status=status,
                                 nationality=nationality, min_price=min_price,
                                 max_price=max_price, min_rating=min_rating, year=year,
-                                sort=sort, desc=desc, page=page, page_size=page_size)
+                                tag=tag, sort=sort, desc=desc, page=page, page_size=page_size)
         notes.annotate(conn, request.app.state.root, data["items"])   # 正文文件名靠推导，不查库
         return data
 
@@ -90,9 +90,9 @@ def update_author_nationalities(payload: AuthorNatIn, request: Request, bid: int
 
 @router.delete("/api/books/{bid}")
 def delete_book(request: Request, bid: int):
+    """删进回收站（不是物理删）：详情页误点还能从 #/trash 恢复。"""
     with conn_of(request) as conn:
-        deleted = conn.execute("DELETE FROM books WHERE id = ?", (bid,)).rowcount
-        conn.commit()
+        deleted = dbmod.trash_book(conn, bid)
     if not deleted:
         raise HTTPException(404, "不存在")
     return {"deleted": bid}

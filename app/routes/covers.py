@@ -50,6 +50,17 @@ def book_douban_id_lookup(request: Request, bid: int):
         return {"douban_id": douban_id}
 
 
+@router.get("/api/lookup/isbn")
+def lookup_isbn(isbn: str):
+    """新书表单的「贴 ISBN 自动填」：豆瓣号 + 书名/作者/出版社（ISBN 必须对上条目）。"""
+    try:
+        return douban.lookup_book_by_isbn(isbn)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except RuntimeError as e:
+        raise HTTPException(502, str(e)) from e
+
+
 @router.get("/api/covers")
 def covers_list(request: Request):
     return sorted(local_cover_stems(covers_dir(request)))

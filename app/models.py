@@ -20,6 +20,7 @@ class BookIn(BaseModel):
     publishers: Optional[List[str]] = None
     categories: Optional[List[str]] = None
     platforms: Optional[List[str]] = None
+    tags: Optional[List[str]] = None
 
 
 class AuthorNatIn(BaseModel):

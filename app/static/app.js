@@ -22,7 +22,15 @@ const numOrNull = s => (s == null || s === "" ? null : Number(s));
 
 async function api(path, opts = {}) {
   const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opts });
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  if (!r.ok) {
+    // FastAPI 的错误在 {"detail": "..."} 里；直接抛 "400 {...}" 太吵，取 detail 给人看
+    let msg = `${r.status}`;
+    try {
+      const j = await r.json();
+      if (j && j.detail) msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail);
+    } catch (e) { /* 非 JSON 错误体就只留状态码 */ }
+    throw new Error(msg);
+  }
   return r.status === 204 ? null : r.json();
 }
 
@@ -241,7 +249,7 @@ function drawSpectrum(axes) {
 // ---------- 分布（单图动态切换：维度 × 指标；点柱条跳书单筛选） ----------
 const DIST = { by: "author", agg: "count", top: 12 };
 const DIST_BY = [["nationality", "国籍"], ["author", "作者"], ["publisher", "出版社"],
-                 ["category", "类别"], ["platform", "平台"], ["year", "年度"]];
+                 ["category", "类别"], ["tag", "标签"], ["platform", "平台"], ["year", "年度"]];
 const DIST_AGG = [["count", "本数"], ["sum_price", "金额"]];
 let distChart = null;
 let distRows = [];
@@ -260,7 +268,7 @@ async function panelDistribution() {
     if (!row) return;
     if (DIST.by === "year") { toast("书单页已去掉年份筛选，年度维度只看不跳"); return; }
     Object.assign(filters, { category: "", author: "", publisher: "", platform: "",
-                             nationality: "", year: "" });
+                             nationality: "", tag: "", year: "" });
     filters[DIST.by] = String(row.key);
     filters.page = 1;
     location.hash = filtersHash();   // 跳转 URL 带上新筛选：书单页后退一格回仪表盘，再前进回来筛选还在
@@ -448,7 +456,7 @@ function cfRender() {
 // 筛选态＝模块状态 + hash 序列化（#/books?author=余华&page=2）：后退/前进/刷新都从 URL 恢复。
 // 写回用 replaceState：筛选/翻页只改写当前条目，不往历史里灌一堆中间态
 const DEFAULT_FILTERS = { q: "", category: "", author: "", publisher: "", platform: "",
-                          nationality: "",
+                          nationality: "", tag: "",
                           status: "", sort: "default", desc: "true", page: 1 };
 const filters = { ...DEFAULT_FILTERS };
 function filtersHash() {
@@ -484,6 +492,42 @@ const dateOf = s => {
 };
 const isoDate = s => /^\d{4}-\d{1,2}-\d{1,2}$/.test(s) && !isNaN(Date.parse(s));
 
+// 书单右栏的按钮只挂图标：20×20 线性 SVG，语义靠 title / aria-label
+const _icon = path => `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"
+  stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
+const ICON = {
+  home: _icon('<path d="M4 4.6h4.6v4.6H4zM11.4 4.6H16v4.6h-4.6zM4 11.4h4.6V16H4zM11.4 11.4H16V16h-4.6z"/>'),
+  books: _icon('<path d="M10 6.2c-1.1-.9-2.6-1.4-5.3-1.4v9.4c2.7 0 4.2.5 5.3 1.4 1.1-.9 2.6-1.4 5.3-1.4V4.8c-2.7 0-4.2.5-5.3 1.4ZM10 6.2v9.4"/>'),
+  export: _icon('<path d="M10 3.5v8.4m0 0 3.2-3.2M10 11.9 6.8 8.7M4.2 15.5v1.2h11.6v-1.2"/>'),
+  plus: _icon('<path d="M10 4.5v11M4.5 10h11"/>'),
+  trash: _icon('<path d="M4.5 6h11M8 6V4.2h4V6M6.2 6l.7 10h6.2l.7-10M8.6 9v4.2M11.4 9v4.2"/>'),
+};
+
+// 全站右侧竖排栏：每个页面都渲染同一条，导航图标固定在原位，
+// 书单页再加一枚分隔线和三个本页操作（筛选/导出/登记）
+const RAIL_NAV = [
+  { href: "#/", title: "仪表盘", icon: ICON.home },
+  { href: "#/books", title: "书单", icon: ICON.books },
+  { href: "#/trash", title: "回收站", icon: ICON.trash },
+];
+const BOOK_ACTIONS = [
+  { id: "f-export", title: "导出整份书库（CSV / JSON）", icon: ICON.export },
+  { id: "f-new", title: "登记新书", icon: ICON.plus },
+];
+function renderRail(actions = []) {
+  const rail = $("#rail");
+  if (!rail) return;
+  const h = location.hash || "#/";
+  const cur = h.startsWith("#/book/") || h === "#/books" || h.startsWith("#/books?")
+    ? "#/books" : h === "#/trash" ? "#/trash" : "#/";
+  rail.innerHTML = `
+    ${RAIL_NAV.map(n => `<a class="fab nav${n.href === cur ? " on" : ""}" href="${n.href}"
+      title="${n.title}" aria-label="${n.title}"${n.href === cur ? ' aria-current="page"' : ""}>${n.icon}</a>`).join("")}
+    ${actions.length ? '<span class="fab-sep" aria-hidden="true"></span>' : ""}
+    ${actions.map(a => `<button class="fab ${a.cls || ""}" type="button" id="${a.id}"
+      title="${a.title}" aria-label="${a.title}">${a.icon}</button>`).join("")}`;
+}
+
 async function booksView() {
   charts.forEach(c => c.dispose()); charts = [];
   const f = FACETS = await api("/api/facets");
@@ -491,6 +535,7 @@ async function booksView() {
   // 芯片占位统一用不带「全部」的名词，「全部×××」在弹层首行；opts=[{v:值,l:显示名}]
   const fDefs = [["author", f.authors.map(v => ({ v, l: v })), "作者"],
                  ["category", f.categories.map(v => ({ v, l: v })), "分类"],
+                 ["tag", f.tags.map(v => ({ v, l: v })), "标签"],
                  ["nationality", f.nationalities.map(v => ({ v, l: v })), "国籍"],
                  ["publisher", f.publishers.map(v => ({ v, l: v })), "出版社"],
                  ["platform", f.platforms.map(v => ({ v, l: v })), "平台"],
@@ -501,15 +546,13 @@ async function booksView() {
     <div class="toolbar">
       <input id="f-q" placeholder="书名 / ISBN" value="${filters.q}">
       ${fDefs.map(([k, , l]) => fbtn(k, l)).join("")}
-      <button id="f-apply" class="primary right">筛选</button>
-      <button id="f-new" class="btn-circle" title="登记新书" aria-label="登记新书">＋</button>
     </div>
     <div class="tbl-wrap"><table id="tbl"><colgroup>
-      <col style="width:19.4%"><col style="width:10.8%"><col style="width:7%"><col style="width:12%">
-      <col style="width:14%"><col style="width:6.5%"><col style="width:8.7%"><col style="width:6%">
-      <col style="width:6%"><col style="width:9.6%">
+      <col style="width:17.4%"><col style="width:9.8%"><col style="width:6%"><col style="width:10.5%">
+      <col style="width:9%"><col style="width:11%"><col style="width:6%"><col style="width:8.2%">
+      <col style="width:5.5%"><col style="width:6%"><col style="width:9.6%">
     </colgroup><thead><tr>
-      <th class="s" data-sort="title" title="点击：排序 · 再点翻转 · 再点取消">书名</th><th>作者</th><th>国籍</th><th>分类</th><th>出版社</th>
+      <th class="s" data-sort="title" title="点击：排序 · 再点翻转 · 再点取消">书名</th><th>作者</th><th>国籍</th><th>分类</th><th>标签</th><th>出版社</th>
       <th>平台</th>
       <th class="s" data-sort="price" title="点击：排序 · 再点翻转 · 再点取消">价格</th>
       <th class="s" data-sort="progress" title="点击：排序 · 再点翻转 · 再点取消">进度</th>
@@ -526,8 +569,17 @@ async function booksView() {
     filters.page = 1;
     loadBooks();
   };
-  $("#f-apply").onclick = apply;
-  $("#f-q").addEventListener("keydown", e => { if (e.key === "Enter") apply(); });
+  // 搜索框自动生效（防抖）：筛选芯片本来就是点完即筛，搜索也保持一致，不另设按钮
+  let qTimer;
+  const qInput = $("#f-q");
+  qInput.addEventListener("input", () => {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => {
+      if (!qInput.isConnected) return;      // 防抖期间已经跳走，别在旧页面上取输入框
+      if (qInput.value.trim() !== filters.q) apply();
+    }, 260);
+  });
+  qInput.addEventListener("keydown", e => { if (e.key === "Enter") { clearTimeout(qTimer); apply(); } });
   const fLabels = () => fDefs.forEach(([k, opts, name]) => {
     const b = view.querySelector(`.f-btn[data-f="${k}"]`);
     const hit = opts.find(o => String(o.v) === String(filters[k]));
@@ -535,12 +587,19 @@ async function booksView() {
     b.classList.toggle("on", !!filters[k]);
     b.title = filters[k] ? `已筛选 ${name}：${hit ? hit.l : filters[k]} · 点击修改` : `${name} · 点击搜索选择`;
   });
-  fDefs.forEach(([k, opts]) => {
+  // 弹层候选池每次现取 FACETS：本次会话里新建的标签/作者，不刷新页面也能出现在推荐里
+  const FACET_KEY = { author: "authors", category: "categories", tag: "tags",
+    nationality: "nationalities", publisher: "publishers", platform: "platforms" };
+  const liveOpts = k => k === "status"
+    ? [{ v: "in_library", l: "在库" }, { v: "sold", l: "已售" }]
+    : (FACETS[FACET_KEY[k]] || []).map(v => ({ v, l: v }));
+  fDefs.forEach(([k]) => {
     const b = view.querySelector(`.f-btn[data-f="${k}"]`);
-    b.onclick = () => openFilterPop(b, opts, filters[k], v => { filters[k] = v; fLabels(); apply(); });
+    b.onclick = () => openFilterPop(b, liveOpts(k), filters[k], v => { filters[k] = v; fLabels(); apply(); });
   });
   fLabels();
   $("#f-new").onclick = toggleNewRow;
+  $("#f-export").onclick = () => openExportMenu($("#f-export"));
   $("#tbl thead").addEventListener("click", e => {
     const th = e.target.closest("th.s");
     if (th) sortBy(th.dataset.sort);
@@ -622,6 +681,31 @@ function openFilterPop(btn, opts, current, cb) {
   q.focus();
 }
 
+// 导出菜单：两条直链就够了——Content-Disposition 让浏览器自己下载，不用 fetch/Blob
+function openExportMenu(btn) {
+  if (popClosed.anchor === btn && Date.now() - popClosed.at < 300) return;
+  closePop();
+  const el = document.createElement("div");
+  el.className = "pop";
+  document.body.appendChild(el);
+  el.innerHTML = `
+    <div class="pop-list">
+      <a class="pop-item single" href="/api/export?format=csv" download>
+        <span>CSV <span class="dull">· Excel 可直接打开</span></span></a>
+      <a class="pop-item single" href="/api/export?format=json" download>
+        <span>JSON <span class="dull">· 全部字段，含笔记文件名</span></span></a>
+    </div>`;
+  el.addEventListener("click", () => setTimeout(closePop, 0));   // 下载开始后就收摊
+  pop = {
+    el, anchor: btn,
+    outside: ev => { if (!el.contains(ev.target)) closePop(); },
+    onScroll: ev => { if (!el.contains(ev.target)) closePop(); },
+  };
+  positionPop(el, btn, 320);
+  addEventListener("scroll", pop.onScroll, true);
+  setTimeout(() => document.addEventListener("mousedown", pop.outside, true));
+}
+
 // 点列名排序三态循环：第一次=该列默认方向（时间/数字降序在前，文字升序在前），
 // 第二次=翻转，第三次=取消按这列排（回默认序：阅读日倒序，未读的按购买日沉底）
 const SORT_DESC_FIRST = new Set(["price", "progress", "rating", "read_at", "created"]);
@@ -664,6 +748,7 @@ function bookRow(b) {
         title="作者国籍（跨书共享，改动全局生效）">${
         (b.nationalities || []).join("、") ? esc(b.nationalities.join("、")) : '<span class="dull">＋ 添加</span>'}</button></td>
       ${dimBtn(b, "categories", (b.categories || []).join("、"))}
+      ${dimBtn(b, "tags", (b.tags || []).join("、"))}
       ${dimBtn(b, "publishers", (b.publishers || []).join("、"))}
       ${dimBtn(b, "platforms", (b.platforms || []).join("、"))}
       <td><input class="inline" data-field="price" value="${b.price ?? ""}" placeholder="—" aria-label="价格"></td>
@@ -900,6 +985,10 @@ async function commitNat(b, map) {
   } catch (e) { toast(e.message, true); }
 }
 async function commitDim(b, dim, value) {
+  // 新词立刻进候选池：不然「在 A 上建了标签，再去 B 上点标签」时 FACETS 还是旧的，
+  // 弹层里一个推荐都没有（要刷新页面才出现）
+  if (Array.isArray(value))
+    FACETS[dim] = [...new Set([...(FACETS[dim] || []), ...value])].sort();
   if (b.id === -1) {                                         // 新书行草稿：回写草稿重绘，不碰库
     draft[dim] = value;
     if (dim === "authors")                                   // 选中老作者顺带带出库里国籍，国籍列自动回显
@@ -923,6 +1012,7 @@ const BOOK_FIELDS = `
   <label>作者（逗号分隔）<input name="authors"></label>
   <label>出版社（逗号分隔）<input name="publishers"></label>
   <label>分类（逗号分隔）<input name="categories"></label>
+  <label>标签（逗号分隔，自由词）<input name="tags"></label>
   <label>平台（逗号分隔，可多）<input name="platforms"></label>
   <label>ISBN<input name="isbn"></label>
   <label>豆瓣编号（subject 号，可空）<input name="douban_id" pattern="[0-9]*" title="只填数字"></label>
@@ -942,6 +1032,7 @@ function formPayload(form) {
   return {
     title: g("title"), authors: splitList(g("authors")), publishers: splitList(g("publishers")),
     categories: splitList(g("categories")), platforms: splitList(g("platforms")),
+    tags: splitList(g("tags")),
     isbn: g("isbn") || null,
     douban_id: g("douban_id") || null,
     price: numOrNull(g("price")), progress: numOrNull(g("progress")), rating: numOrNull(g("rating")),
@@ -957,7 +1048,7 @@ function formPayload(form) {
 let draft = null;                     // 未保存的新书行；id=-1 与 rowItems 里的真实书区分
 
 const newDraft = () => ({ id: -1, title: "", authors: [], nationalities: [], author_nationalities: {},
-  categories: [], publishers: [], platforms: [], price: null, progress: null,
+  categories: [], tags: [], publishers: [], platforms: [], price: null, progress: null,
   status: "in_library", read_at: null,
   isbn: "", douban_id: "", rating: "", importance: "" });
 
@@ -1002,14 +1093,16 @@ function syncInputsToDraft() {
 }
 
 // 幂等：先摘再插，始终钉在第一行（loadBooks 重建表体后也用它把行找回来）
-function showNewRow() {
+// skipSync：调用方已在内存里改好草稿（如 ISBN 补全），别让 DOM 里的旧值再盖回去
+function showNewRow(skipSync) {
   const tb = $("#tbl tbody");
   if (!tb) return;
-  syncInputsToDraft();   // 摘行前先快照，筛选/排序/翻页重建不丢已填的值
+  if (!skipSync) syncInputsToDraft();   // 摘行前先快照，筛选/排序/翻页重建不丢已填的值
   tb.querySelectorAll("tr.new-row").forEach(el => el.remove());
   tb.insertAdjacentHTML("afterbegin", newBookRow());
   $("#n-form").onsubmit = e => { e.preventDefault(); saveDraft(); };
   $("#n-cancel").onclick = dropNewRow;
+  $("#n-lookup").onclick = lookupIsbnDraft;
   $("#n-title").addEventListener("keydown", e => {
     if (e.key === "Enter") { e.preventDefault(); saveDraft(); }   // 书名框直接 Enter 保存
   });
@@ -1026,6 +1119,7 @@ function newBookRow() {
         title="作者国籍（跨书共享，改动全局生效）">${
         (d.nationalities || []).join("、") ? esc(d.nationalities.join("、")) : '<span class="dull">＋ 添加</span>'}</button></td>
       ${dimBtn(d, "categories", (d.categories || []).join("、"))}
+      ${dimBtn(d, "tags", (d.tags || []).join("、"))}
       ${dimBtn(d, "publishers", (d.publishers || []).join("、"))}
       ${dimBtn(d, "platforms", (d.platforms || []).join("、"))}
       <td><input class="inline" data-field="price" value="${d.price ?? ""}" placeholder="—" aria-label="价格"></td>
@@ -1036,14 +1130,38 @@ function newBookRow() {
       <td><input type="text" class="inline dt${d.read_at ? " has" : ""}" data-field="read_at"
         value="${dateOf(d.read_at)}" aria-label="读完日期（yyyy-mm-dd，点击可选）" spellcheck="false"></td>
     </tr>
-    <tr class="new-row sub"><td colspan="10"><form id="n-form" class="n-extra">
-      <label>ISBN<input name="isbn" value="${esc(d.isbn)}"></label>
+    <tr class="new-row sub"><td colspan="11"><form id="n-form" class="n-extra">
+      <label>ISBN<input name="isbn" value="${esc(d.isbn)}" placeholder="978…"><button type="button"
+        id="n-lookup" title="按 ISBN 从豆瓣补全书名/作者/出版社">查</button></label>
       <label>豆瓣编号<input name="douban_id" pattern="[0-9]*" title="只填数字" value="${esc(d.douban_id)}"></label>
       <label>评分 1-10<input name="rating" type="number" min="1" max="10" value="${esc(d.rating)}"></label>
       <label>重要度 0-1<input name="importance" type="number" step="0.1" min="0" max="1" value="${esc(d.importance)}"></label>
       <span class="n-btns"><button class="primary" type="submit">保存</button>
       <button type="button" id="n-cancel">取消</button></span>
     </form></td></tr>`;
+}
+
+// 贴 ISBN 补全新书行：豆瓣号 + 书名/作者/出版社一次带出来，只填空位，不覆盖手填的内容
+async function lookupIsbnDraft() {
+  if (!draft) return;
+  syncInputsToDraft();
+  const isbn = (draft.isbn || "").trim();
+  if (!isbn) return toast("先填 ISBN", true);
+  const btn = $("#n-lookup");
+  if (btn) { btn.disabled = true; btn.textContent = "查…"; }
+  try {
+    const m = await api(`/api/lookup/isbn?isbn=${encodeURIComponent(isbn)}`);
+    draft.isbn = m.isbn || isbn;
+    draft.douban_id = m.douban_id || draft.douban_id;
+    if (!draft.title.trim()) draft.title = m.title || "";
+    if (!draft.authors.length) draft.authors = m.authors || [];
+    if (!draft.publishers.length) draft.publishers = m.publishers || [];
+    showNewRow(true);   // 草稿已是新值；再 sync 会把刚填的覆盖回空
+    toast(`已按 ISBN 补全：${m.title || m.isbn}`);
+  } catch (err) {
+    if (btn) { btn.disabled = false; btn.textContent = "查"; }
+    toast(err.message, true);
+  }
 }
 
 async function saveDraft() {
@@ -1053,7 +1171,8 @@ async function saveDraft() {
   syncInputsToDraft();
   const payload = {
     title: draft.title, authors: draft.authors,
-    publishers: draft.publishers, categories: draft.categories, platforms: draft.platforms,
+    publishers: draft.publishers, categories: draft.categories, tags: draft.tags,
+    platforms: draft.platforms,
     isbn: draft.isbn || null, douban_id: draft.douban_id || null,
     price: draft.price, progress: draft.progress,
     rating: numOrNull(draft.rating), importance: numOrNull(draft.importance),
@@ -1103,9 +1222,17 @@ async function bookDetail(id) {
   view.innerHTML = `
     <div class="detail">
       <section class="panel meta">
-        ${coverImg}
-        <h2>${b.title}${dbk}${obs}</h2>
-        <p class="muted" style="font-size:12px;margin:4px 0 10px">创建 ${esc(dateOf(b.created) || "—")} · 更新 ${esc(dateOf(b.last_modified) || "—")}</p>
+        <div class="d-head">
+          <div class="d-head-main">
+            <h2>${b.title}</h2>
+            ${dbk || obs ? `<div class="d-links">${dbk}${obs}</div>` : ""}
+            <div class="d-dates">
+              <span>创建 ${esc(dateOf(b.created) || "—")}</span>
+              <span>更新 ${esc(dateOf(b.last_modified) || "—")}</span>
+            </div>
+          </div>
+          ${coverImg}
+        </div>
         <form id="d-form">${BOOK_FIELDS}
           <div class="row"><button class="primary" type="submit">保存</button>
           <button class="danger" type="button" id="d-del">删除记录</button></div>
@@ -1123,6 +1250,7 @@ async function bookDetail(id) {
   el("authors").value = (b.authors || []).join("、");
   el("publishers").value = (b.publishers || []).join("、");
   el("categories").value = (b.categories || []).join("、");
+  el("tags").value = (b.tags || []).join("、");
   el("platforms").value = (b.platforms || []).join("、");
   el("isbn").value = b.isbn || "";
   el("douban_id").value = b.douban_id || "";
@@ -1198,18 +1326,63 @@ async function bookDetail(id) {
     } catch (err) { toast(err.message, true); }
   };
   $("#d-del").onclick = async () => {
-    if (!confirm("删除该书目记录？（raw/books/ 正文文件不受影响）")) return;
+    if (!confirm("移入回收站？raw/books/ 正文文件不受影响，之后可在「回收站」恢复。")) return;
     await api(`/api/books/${id}`, { method: "DELETE" });
+    toast("已移入回收站 · 可在「回收站」恢复", false, true);
     location.hash = filtersHash();   // 删完回列表，保留当时的筛选态
   };
+}
+
+// ---------- 回收站：删除只是先从账本上摘下来，正文文件从没动过 ----------
+async function trashView() {
+  charts.forEach(c => c.dispose()); charts = [];
+  const data = await api("/api/trash");
+  const rows = data.items.map(t => `
+    <tr data-tid="${t.id}">
+      <td class="title">${esc(t.title)}</td>
+      <td>${esc((t.authors || []).join("、")) || '<span class="dull">—</span>'}</td>
+      <td>${esc(t.deleted_at || "—")}</td>
+      <td class="t-actions">
+        <button type="button" data-do="restore">恢复</button>
+        <button type="button" class="danger" data-do="purge">彻底删除</button>
+      </td>
+    </tr>`).join("");
+  view.innerHTML = `
+    <div class="toolbar"><span class="muted">删除的书目先放这里，不参与统计；恢复会按当时的字段重建一条记录。笔记文件一直在 raw/books/。</span></div>
+    <div class="tbl-wrap"><table id="tbl"><colgroup>
+      <col style="width:44%"><col style="width:24%"><col style="width:16%"><col style="width:16%">
+    </colgroup><thead><tr><th>书名</th><th>作者</th><th>删除时间</th><th>操作</th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="4" class="dull" style="text-align:center;padding:28px">回收站是空的。</td></tr>`}</tbody>
+    </table></div>`;
+  view.querySelector("tbody").addEventListener("click", async e => {
+    const btn = e.target.closest("button[data-do]");
+    if (!btn) return;
+    const tid = btn.closest("tr").dataset.tid;
+    if (btn.dataset.do === "purge"
+        && !confirm("彻底删除这条快照？之后无法恢复（raw/books/ 正文文件不受影响）。")) return;
+    btn.disabled = true;
+    try {
+      if (btn.dataset.do === "restore") {
+        await api(`/api/trash/${tid}/restore`, { method: "POST" });
+        toast("已恢复");
+      } else {
+        await api(`/api/trash/${tid}`, { method: "DELETE" });
+        toast("已彻底删除");
+      }
+      await trashView();
+    } catch (err) { btn.disabled = false; toast(err.message, true); }
+  });
 }
 
 // ---------- 路由 & 全局按钮 ----------
 function route() {
   const h = location.hash || "#/";
   const m = h.match(/^#\/book\/(\d+)/);
+  const onBooks = h === "#/books" || h.startsWith("#/books?");
+  renderRail(onBooks ? BOOK_ACTIONS : []);   // 导航按钮每页都在，书单页多加三个操作
   if (m) bookDetail(m[1]);
-  else if (h === "#/books" || h.startsWith("#/books?")) { filtersFromHash(h); booksView(); }
+  else if (onBooks) { filtersFromHash(h); booksView(); }
+  else if (h === "#/trash") trashView();
   else dashboard();
 }
 

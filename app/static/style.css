@@ -106,8 +106,6 @@ header { display: flex; justify-content: space-between; align-items: center; gap
 .wordmark { font: 600 21px/1.1 var(--font-display); letter-spacing: .14em; display: block; }
 .tagline { font-size: 11px; color: var(--muted); letter-spacing: .06em; display: block; margin-top: 2px; }
 .hd-right { display: flex; align-items: center; gap: 14px; }
-nav a { color: var(--text-secondary); text-decoration: none; margin-right: 14px; font-size: 13px; }
-nav a:hover { color: var(--series-1); }
 /* 报头右上角 GitHub 猫头：跟 Sync/Push 同排，悬停浮印章红 */
 .hd-right .gh { display: grid; place-items: center; width: 32px; height: 32px;
   border-radius: 50%; color: var(--text-secondary); transition: color .12s ease, transform .12s ease;
@@ -133,7 +131,7 @@ nav a:hover { color: var(--series-1); }
 .theme-opt.on { color: var(--series-1); font-weight: 600; }
 .theme-opt .tick { width: 14px; flex: none; color: var(--series-1); font-weight: 700; }
 
-main { max-width: 1120px; margin: 0 auto; padding: 20px 16px 48px; }
+main { max-width: 1120px; margin: 0 auto; padding: 20px 72px 48px 16px; }
 button { padding: 6px 12px; border: 1px solid var(--border); border-radius: var(--r-ctl);
   background: var(--panel); color: var(--text-primary); cursor: pointer; font-size: 13px;
   font-family: var(--font-body); }
@@ -231,7 +229,7 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid color-mix(i
 }
 
 /* ---------- 书单 ---------- */
-.toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
 table { width: 100%; border-collapse: collapse; background: var(--panel);
   border: 1px solid var(--border); border-radius: var(--r-box); overflow: hidden; box-shadow: var(--shadow); }
 th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--grid);
@@ -248,11 +246,39 @@ td select.inline { width: auto; }
 .pager span { color: var(--muted); font-size: 12px; }
 .pager select { font-size: 12px; padding: 4px 6px; }
 
-/* ---------- 可填的账本：书单页原地改账 ---------- */
-.toolbar .right { margin-left: auto; }
-/* 筛选芯片＝可搜索单选下拉的触发器：文字左对齐 + 小箭头，宽度与原生 select 拉齐 */
-.toolbar .f-btn { width: 126px; flex: none; display: inline-flex; align-items: center;
+/* ---------- 全站右侧竖排栏：导航 + 当前页操作，所有页面共用一条 ---------- */
+.rail { position: fixed; z-index: 35; top: 92px; right: 20px;
+  display: flex; flex-direction: column; gap: 8px; }
+.fab { width: 40px; height: 40px; padding: 0; display: grid; place-items: center;
+  border-radius: 50%; background: var(--panel); color: var(--text-secondary);
+  border: 1px solid var(--border); box-shadow: var(--shadow); cursor: pointer;
+  transition: transform .13s ease, color .13s ease, border-color .13s ease; }
+.fab svg { width: 18px; height: 18px; }
+.fab:hover { color: var(--series-1); border-color: var(--series-1); transform: scale(1.07); }
+/* 常驻导航（仪表盘/书单/回收站）实心；本页操作（筛选/导出/登记）空心 */
+.fab.nav { background: var(--series-1); border-color: var(--series-1); color: #fff; }
+.fab.nav:hover { color: #fff; filter: brightness(1.08); }
+.fab.nav.on { box-shadow: 0 0 0 3px color-mix(in srgb, var(--series-1) 26%, transparent); }
+.fab:focus-visible { outline: 2px solid color-mix(in srgb, var(--series-1) 60%, transparent);
+  outline-offset: 2px; }
+.fab-sep { width: 22px; height: 1px; margin: 1px auto; background: var(--border); }
+@media (max-width: 700px) {   /* 窄屏：竖排改贴底横排，别压在内容上 */
+  main { padding-right: 16px; padding-bottom: 96px; }
+  #toast { bottom: 78px; }
+  .rail { top: auto; bottom: 14px; right: 50%; transform: translateX(50%);
+    flex-direction: row; padding: 6px; border-radius: 999px;
+    background: color-mix(in srgb, var(--panel) 94%, transparent);
+    border: 1px solid var(--border); box-shadow: var(--shadow); }
+  .fab { width: 36px; height: 36px; border-color: transparent; box-shadow: none; }
+  .fab-sep { width: 1px; height: 22px; align-self: center; }
+}
+/* 筛选芯片＝可搜索单选下拉的触发器：文字左对齐 + 小箭头，宽度与原生 select 拉齐。
+   七个芯片 + 搜索框在 1120 的内容宽里必须排成一行，所以比原来窄一点 */
+.toolbar .f-btn { width: 108px; flex: none; display: inline-flex; align-items: center;
   justify-content: space-between; gap: 6px; padding: 5px 8px; text-align: left; }
+.toolbar #f-q { flex: 1 1 140px; min-width: 120px; max-width: 240px; }
+/* 筛选条比表格行高一档，跟下面的表拉开距离 */
+.toolbar .f-btn, .toolbar #f-q { height: 36px; padding-top: 6px; padding-bottom: 6px; }
 .f-val { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .f-caret { flex: none; }
 .f-caret::after { content: "▾"; color: var(--muted); font-size: 10px; }
@@ -260,15 +286,12 @@ td select.inline { width: auto; }
 .f-btn.on .f-val { color: var(--series-1); font-weight: 600; }
 /* 弹层里的单选用行：抖掉基础 button 的描边底色，长得和 .pop-item 一致 */
 .pop-item.single { width: 100%; border: none; background: none; }
-/* 登记新书：左上角圆钮——印章红的圆 + 一枚「＋」，区别于行内药丸按钮 */
-.btn-circle { width: 42px; height: 42px; border-radius: 50%; flex: none; padding: 0;
-  display: grid; place-items: center; background: var(--series-1); color: #fff;
-  border: 1px solid var(--series-1); font: 700 24px/1 var(--font-display);
-  cursor: pointer; transition: transform .13s ease, box-shadow .13s ease; }
-.btn-circle:hover { transform: scale(1.08); color: #fff;
-  box-shadow: 0 6px 18px color-mix(in srgb, var(--series-1) 45%, transparent); }
-.btn-circle:focus-visible { outline: 2px solid color-mix(in srgb, var(--series-1) 60%, transparent);
-  outline-offset: 2px; }
+/* 导出菜单是直链（<a href="/api/export…" download>），抖掉链接色和下划线 */
+a.pop-item { color: inherit; text-decoration: none; }
+/* 回收站的操作列：两个按钮并排，别换行 */
+#tbl td.t-actions { white-space: nowrap; }
+#tbl td.t-actions button { margin-right: 6px; }
+/* 登记新书：印章红的圆钮（右栏里那个＋），区别于白色功能键 */
 .tbl-wrap { border: 1px solid var(--border); border-radius: var(--r-box);
   background: var(--panel); box-shadow: var(--shadow); }
 .tbl-wrap table { border: 0; box-shadow: none; border-radius: 0;
@@ -334,9 +357,17 @@ td input.dt.has { background-image: none; padding-right: 6px; }
 /* ---------- 详情 ---------- */
 .detail { display: grid; grid-template-columns: 330px 1fr; gap: 14px; }
 @media (max-width: 800px) { .detail { grid-template-columns: 1fr; } }
+/* 头部 = 书名/链接/日期 一列 + 封面一列。封面不再 float：float 会把下面表单里
+   宽度 100% 的 input 挤到下一行（标签和输入框之间空一大截） */
+.d-head { display: flex; gap: 12px; align-items: flex-start; margin-bottom: 12px; }
+.d-head-main { flex: 1; min-width: 0; }
 .detail .meta h2 { font: 600 22px/1.35 var(--font-display); letter-spacing: .03em;
-  color: var(--text-primary); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.d-cover { float: right; width: 104px; aspect-ratio: 2 / 3; object-fit: contain; margin: 0 0 10px 14px;
+  color: var(--text-primary); }
+.d-links { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; margin-top: 5px; }
+.d-links .obs { margin-left: 0; }   /* 分行后不再需要左侧留白 */
+.d-dates { display: flex; flex-direction: column; gap: 2px; margin-top: 8px;
+  font-size: 12px; color: var(--muted); }
+.d-cover { flex: none; width: 104px; aspect-ratio: 2 / 3; object-fit: contain; margin: 0;
   border-radius: 3px; box-shadow: 0 6px 18px rgba(60, 35, 10, .28); background: var(--panel); }
 .meta label { display: block; margin-bottom: 8px; font-size: 12px; color: var(--muted); }
 .meta input, .meta select { width: 100%; margin-top: 2px; }

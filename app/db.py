@@ -1,4 +1,5 @@
 """SQLite schema 与图书数据访问。所有 SQL 集中于此，API 层不写 SQL。"""
+import json
 import re
 import sqlite3
 from contextlib import contextmanager
@@ -13,6 +14,8 @@ CREATE TABLE IF NOT EXISTS author_nationalities (
 CREATE TABLE IF NOT EXISTS publishers (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS platforms (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
+-- 标签：自由词（年度最佳/重读/套装…），与 categories 的体裁轴分开，不参与口味光谱
+CREATE TABLE IF NOT EXISTS tags (id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS books (
   id INTEGER PRIMARY KEY,
   title TEXT NOT NULL,
@@ -46,11 +49,23 @@ CREATE TABLE IF NOT EXISTS book_platforms (
   book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
   platform_id INTEGER REFERENCES platforms(id),
   PRIMARY KEY (book_id, platform_id));
+CREATE TABLE IF NOT EXISTS book_tags (
+  book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
+  tag_id INTEGER REFERENCES tags(id),
+  PRIMARY KEY (book_id, tag_id));
+-- 回收站：删除 = 快照进这里再从 books 摘走（不是物理删）。快照是 _shape 的全量 JSON，
+-- 恢复时按快照重建；不存外键，免得恢复前维度行被清掉就还原不出来
+CREATE TABLE IF NOT EXISTS books_trash (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  book_id INTEGER NOT NULL,          -- 原 books.id，仅供追溯；恢复走 _insert 重新分号
+  payload TEXT NOT NULL,
+  deleted_at TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS ix_book_title ON books(title);
 CREATE INDEX IF NOT EXISTS ix_book_status ON books(status);
 CREATE INDEX IF NOT EXISTS ix_book_created ON books(created);
 CREATE INDEX IF NOT EXISTS ix_bookcat_category ON book_categories(category_id);
 CREATE INDEX IF NOT EXISTS ix_bookplat_platform ON book_platforms(platform_id);
+CREATE INDEX IF NOT EXISTS ix_booktag_tag ON book_tags(tag_id);
 """
 
 _YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
@@ -102,7 +117,8 @@ def now_stamp():
 _M2M = (("book_authors", "authors", "authors", "author_id"),
         ("book_publishers", "publishers", "publishers", "publisher_id"),
         ("book_categories", "categories", "categories", "category_id"),
-        ("book_platforms", "platforms", "platforms", "platform_id"))
+        ("book_platforms", "platforms", "platforms", "platform_id"),
+        ("book_tags", "tags", "tags", "tag_id"))
 
 
 def get_db(path):
@@ -304,6 +320,7 @@ def _shape(conn, row):
         "publishers": _names(conn, "book_publishers", "publishers", "publishers", "publisher_id", bid),
         "categories": _names(conn, "book_categories", "categories", "categories", "category_id", bid),
         "platforms": _names(conn, "book_platforms", "platforms", "platforms", "platform_id", bid),
+        "tags": _names(conn, "book_tags", "tags", "tags", "tag_id", bid),
     }
 
 
@@ -341,9 +358,70 @@ def save_douban_id_if_missing(conn, bid, isbn, douban_id):
     return bool(changed)
 
 
+def all_books(conn):
+    """全库（不含回收站），按 id 升序。给导出用：分页接口再拼一遍没必要。"""
+    return [_shape(conn, r) for r in conn.execute(_SELECT_NAMES + " ORDER BY b.id")]
+
+
+def trash_book(conn, bid):
+    """删除 = 快照进 books_trash 再从 books 摘走。活着的那张表里没有它，
+    列表/统计/仪表盘/笔记归属自然全看不见，不用在每个查询里补 deleted 条件。
+    正文 md 不动：删除书目不该动用户的文件。"""
+    row = conn.execute(_SELECT_NAMES + " WHERE b.id = ?", (bid,)).fetchone()
+    if not row:
+        return None
+    snapshot = _shape(conn, row)
+    conn.execute("INSERT INTO books_trash (book_id, payload, deleted_at) VALUES (?, ?, ?)",
+                 (bid, json.dumps(snapshot, ensure_ascii=False), now_stamp()))
+    conn.execute("DELETE FROM books WHERE id = ?", (bid,))
+    conn.commit()
+    return bid
+
+
+def list_trash(conn):
+    """回收站列表：只回标题/作者/删除时间这类够列表渲染的字段，不回整份快照。"""
+    out = []
+    for r in conn.execute("SELECT id, book_id, payload, deleted_at FROM books_trash "
+                          "ORDER BY deleted_at DESC, id DESC"):
+        try:
+            p = json.loads(r["payload"])
+        except (TypeError, ValueError):
+            p = {}
+        out.append({"id": r["id"], "book_id": r["book_id"], "deleted_at": r["deleted_at"],
+                    "title": p.get("title") or "（快照损坏）",
+                    "authors": p.get("authors") or []})
+    return out
+
+
+def restore_book(conn, trash_id):
+    """按快照重建为一条新记录（id 重新分配），原 created 保留、last_modified 重盖。"""
+    row = conn.execute("SELECT payload FROM books_trash WHERE id = ?", (trash_id,)).fetchone()
+    if not row:
+        return None
+    try:
+        b = json.loads(row["payload"])
+    except (TypeError, ValueError):
+        raise ValueError("回收站快照损坏，无法恢复")
+    b.pop("id", None)
+    if not (b.get("title") or "").strip():
+        raise ValueError("回收站快照没有书名，无法恢复")
+    b["last_modified"] = now_stamp()
+    new_id = _insert(conn, b)
+    conn.execute("DELETE FROM books_trash WHERE id = ?", (trash_id,))
+    conn.commit()
+    return new_id
+
+
+def purge_book(conn, trash_id):
+    """彻底删除快照（正文 md 仍留在磁盘，按「没人认领的文件」处理）。"""
+    changed = conn.execute("DELETE FROM books_trash WHERE id = ?", (trash_id,)).rowcount
+    conn.commit()
+    return bool(changed)
+
+
 def list_books(conn, q=None, category=None, author=None, publisher=None, platform=None,
                status=None, nationality=None, min_price=None, max_price=None, min_rating=None,
-               year=None, sort="default", desc=False, page=1, page_size=50):
+               year=None, tag=None, sort="default", desc=False, page=1, page_size=50):
     where, args = ["1=1"], []
     if q:
         where.append("(b.title LIKE ? OR b.isbn = ?)")
@@ -379,6 +457,10 @@ def list_books(conn, q=None, category=None, author=None, publisher=None, platfor
         where.append("EXISTS (SELECT 1 FROM book_categories bc JOIN categories c ON c.id = bc.category_id "
                      "WHERE bc.book_id = b.id AND c.name = ?)")
         args.append(category)
+    if tag:
+        where.append("EXISTS (SELECT 1 FROM book_tags bt JOIN tags t ON t.id = bt.tag_id "
+                     "WHERE bt.book_id = b.id AND t.name = ?)")
+        args.append(tag)
     base = f" FROM books b WHERE {' AND '.join(where)}"
     total = conn.execute(f"SELECT COUNT(*){base}", args).fetchone()[0]
     # 副键必须跟主键同向：日期列的值可能整组为 NULL（已售书 created 全空），
@@ -411,6 +493,9 @@ def facets(conn):
     platforms = [r[0] for r in conn.execute(
         "SELECT DISTINCT p.name FROM platforms p JOIN book_platforms bp ON bp.platform_id = p.id "
         "ORDER BY p.name")]
+    tags = [r[0] for r in conn.execute(
+        "SELECT DISTINCT t.name FROM tags t JOIN book_tags bt ON bt.tag_id = t.id "
+        "ORDER BY t.name")]
     nats = [r[0] for r in conn.execute(
         "SELECT DISTINCT an.nationality FROM authors a JOIN book_authors ba ON ba.author_id=a.id "
         "JOIN author_nationalities an ON an.author_id=a.id "
@@ -430,8 +515,10 @@ def facets(conn):
         f"SELECT DISTINCT year_of(created) FROM books "
         f"WHERE year_of(created) IS NOT NULL ORDER BY 1 DESC")]
     return {"categories": categories, "platforms": platforms,
-            "authors": authors, "publishers": publishers,
+            "authors": authors, "publishers": publishers, "tags": tags,
             "nationalities": nats, "author_nationalities": author_nat, "years": years}
+
+
 def stats_summary(conn):
     r = conn.execute(
         """SELECT SUM(status = 'in_library') AS in_lib,
@@ -447,7 +534,7 @@ def stats_summary(conn):
 
 
 def stats_group(conn, by, agg="count"):
-    """按维度聚合。by: category|platform|author|publisher|year|rating|nationality；
+    """按维度聚合。by: category|platform|author|publisher|year|rating|nationality|tag；
     agg: count|sum_price|avg_rating。NULL 价格不参与金额；多值维度不重复计数同一本书。"""
     if agg not in ("count", "sum_price", "avg_rating"):
         raise ValueError(f"bad agg: {agg}")
@@ -455,6 +542,8 @@ def stats_group(conn, by, agg="count"):
         "category": "SELECT b.id, b.price, b.rating, c.name AS key FROM books b "
                     "JOIN book_categories bc ON bc.book_id = b.id "
                     "JOIN categories c ON c.id = bc.category_id",
+        "tag": "SELECT b.id, b.price, b.rating, t.name AS key FROM books b "
+               "JOIN book_tags bt ON bt.book_id = b.id JOIN tags t ON t.id = bt.tag_id",
         "platform": "SELECT b.id, b.price, b.rating, p.name AS key FROM books b "
                     "JOIN book_platforms bp ON bp.book_id = b.id JOIN platforms p ON p.id = bp.platform_id",
         "author": "SELECT b.id, b.price, b.rating, a.name AS key FROM books b "
