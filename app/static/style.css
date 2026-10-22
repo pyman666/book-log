@@ -354,6 +354,38 @@ td input.dt.has { background-image: none; padding-right: 6px; }
 .pop-grp:first-child .pop-grp-h { border-top: 0; padding-top: 1px; }
 .pop-grp.on .pop-grp-h { color: var(--series-1); }
 
+/* ---------- 字典：作者/标签/分类等词表的改名（合并）与删除 ---------- */
+/* 维度用标签切换（一次只看一块），标签上的数字是该维度值总数；
+   行内输入框改名，count=0（没人挂）的行用错误色标出来 */
+.ent-tabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.ent-tabs .tab { display: inline-flex; align-items: baseline; gap: 5px; padding: 5px 10px;
+  font-size: 12px; }
+.ent-tabs .tab .c { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+.ent-tabs .tab:hover { color: var(--series-1); border-color: var(--series-1); }
+.ent-tabs .tab.on { color: var(--series-1); border-color: var(--series-1); font-weight: 600;
+  background: color-mix(in srgb, var(--series-1) 8%, transparent); }
+.ent-tabs .tab.on .c { color: var(--series-1); }
+.toolbar #d-orphans { margin-left: auto; }
+.panel .ent-q { width: 132px; font-size: 12px; padding: 3px 8px; }
+.ent-t { border: none; box-shadow: none; background: transparent; }
+.ent-t th, .ent-t td { padding: 4px 10px; font-size: 13px; }
+.ent-t td { vertical-align: middle; }
+.ent-t td.nm { overflow: hidden; }
+/* 名字本身做成按钮：点字即改，省一个「改名」入口 */
+.ent-nm { display: block; width: 100%; border: 0; background: none; padding: 3px 2px;
+  font: inherit; color: var(--text-primary); cursor: text; text-align: left;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ent-nm:hover { color: var(--series-1); }
+.ent-edit { width: 100%; }
+.ent-t td.n { font-variant-numeric: tabular-nums; }
+.ent-t td.n .u { color: var(--muted); font-size: 11px; }
+.ent-t tr[data-count="0"] td.n { color: var(--bad); }
+.ent-t td.a { white-space: nowrap; }
+.ent-t td.a button { margin-left: 6px; padding: 3px 8px; font-size: 12px; }
+.ent-t td.a button:first-child { margin-left: 0; }
+.ent-t tr.ent-empty td { text-align: center; padding: 16px 10px; color: var(--muted);
+  font-size: 12px; }
+
 /* ---------- 详情 ---------- */
 .detail { display: grid; grid-template-columns: 330px 1fr; gap: 14px; }
 @media (max-width: 800px) { .detail { grid-template-columns: 1fr; } }

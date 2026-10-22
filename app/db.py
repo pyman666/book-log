@@ -120,6 +120,17 @@ _M2M = (("book_authors", "authors", "authors", "author_id"),
         ("book_platforms", "platforms", "platforms", "platform_id"),
         ("book_tags", "tags", "tags", "tag_id"))
 
+# 可维护的维度：词表行 + 关联表（列名即外键）。
+# 「字典」页按这个字典统一改名/合并/删除；加新维度＝这里加一行。
+_DIMS = {"authors": ("authors", "book_authors", "author_id"),
+         "publishers": ("publishers", "book_publishers", "publisher_id"),
+         "categories": ("categories", "book_categories", "category_id"),
+         "platforms": ("platforms", "book_platforms", "platform_id"),
+         "tags": ("tags", "book_tags", "tag_id")}
+_VALID_DIMS = set(_DIMS) | {"nationality"}   # 国籍是挂在作者身上的文本，没有词表行
+DIM_LABELS = {"authors": "作者", "publishers": "出版社", "categories": "分类",
+              "platforms": "平台", "tags": "标签", "nationality": "作者国籍"}
+
 
 def get_db(path):
     conn = sqlite3.connect(str(path))
@@ -517,6 +528,84 @@ def facets(conn):
     return {"categories": categories, "platforms": platforms,
             "authors": authors, "publishers": publishers, "tags": tags,
             "nationalities": nats, "author_nationalities": author_nat, "years": years}
+
+
+def dim_inventory(conn):
+    """全部维度的取值清单（含孤立行）：facets 只给「挂到书上的」，拼错值没人挂时根本看不见，
+    所以维护页要连没被引用的行一起列出（count=0 就是最像拼错的候选）。
+    返回 {维度: [{"name", "count"}]}，count = 关联了几本书（国籍 = 几个作者在用）。"""
+    out = {}
+    for key, (table, join, fk) in _DIMS.items():
+        out[key] = [{"name": r["name"], "count": r["n"]} for r in conn.execute(
+            f"SELECT d.name, COUNT(j.book_id) AS n FROM {table} d "
+            f"LEFT JOIN {join} j ON j.{fk} = d.id "
+            f"GROUP BY d.id, d.name ORDER BY n DESC, d.name")]
+    out["nationalities"] = [{"name": r["name"], "count": r["n"]} for r in conn.execute(
+        "SELECT nationality AS name, COUNT(*) AS n FROM author_nationalities "
+        "WHERE nationality != '' GROUP BY nationality ORDER BY n DESC, nationality")]
+    return out
+
+
+def rename_dim(conn, dim, old, new):
+    """改一个维度值：新值已存在＝合并（关联行改指现有行、旧行删掉），否则原地改名。
+    返回 {"name": 新值, "books": 受影响的书本数, "merged": 是否合并}。"""
+    old, new = (old or "").strip(), (new or "").strip()
+    if not old:
+        raise ValueError("值不能为空")
+    if not new:
+        raise ValueError("新值不能为空")
+    if new == old:
+        raise ValueError("新旧值相同，不用改")
+    if dim not in _VALID_DIMS:
+        raise ValueError(f"未知的维度：{dim}")
+    if dim == "nationality":                    # 国籍是挂在作者身上的纯文本，没有词表行
+        n = conn.execute("UPDATE author_nationalities SET nationality = ? WHERE nationality = ?",
+                         (new, old)).rowcount
+        if not n:
+            raise ValueError(f"作者国籍里没有「{old}」")
+        conn.commit()
+        return {"name": new, "books": n, "merged": False}
+    table, join, fk = _DIMS[dim]
+    cur = conn.execute(f"SELECT id, (SELECT COUNT(*) FROM {join} WHERE {fk} = {table}.id) AS n "
+                       f"FROM {table} WHERE name = ?", (old,))
+    row = cur.fetchone()
+    if not row:
+        raise ValueError(f"{DIM_LABELS[dim]}里没有「{old}」")
+    exist = conn.execute(f"SELECT id FROM {table} WHERE name = ?", (new,)).fetchone()
+    if exist:                                   # 合并：改指现有行，再删掉重复行
+        conn.execute(f"UPDATE {join} SET {fk} = ? WHERE {fk} = ?", (exist["id"], row["id"]))
+        conn.execute(f"DELETE FROM {table} WHERE id = ?", (row["id"],))
+        merged = True
+    else:
+        conn.execute(f"UPDATE {table} SET name = ? WHERE id = ?", (new, row["id"]))
+        merged = False
+    conn.commit()
+    return {"name": new, "books": row["n"], "merged": merged}
+
+
+def delete_dim(conn, dim, name):
+    """删掉一个维度值：先把关联摘掉（书还在，只是这一栏少一个值），再删词表行。
+    作者连带国籍映射（外键级联）；不碰回收站快照、不碰 raw/books/ 正文。
+    这里只管词表值本身，不管某本书具体挂没挂这个值——那是书单页的事。
+    返回 {"name", "books": 受影响书本数}。"""
+    name = (name or "").strip()
+    if not name:
+        raise ValueError("值不能为空")
+    if dim not in _VALID_DIMS:
+        raise ValueError(f"未知的维度：{dim}")
+    if dim == "nationality":
+        n = conn.execute("DELETE FROM author_nationalities WHERE nationality = ?", (name,)).rowcount
+        conn.commit()
+        return {"name": name, "books": n}
+    table, join, fk = _DIMS[dim]
+    rid = conn.execute(f"SELECT id FROM {table} WHERE name = ?", (name,)).fetchone()
+    if not rid:
+        raise ValueError(f"{DIM_LABELS[dim]}里没有「{name}」")
+    books = conn.execute(f"SELECT COUNT(*) FROM {join} WHERE {fk} = ?", (rid["id"],)).fetchone()[0]
+    conn.execute(f"DELETE FROM {join} WHERE {fk} = ?", (rid["id"],))
+    conn.execute(f"DELETE FROM {table} WHERE id = ?", (rid["id"],))
+    conn.commit()
+    return {"name": name, "books": books}
 
 
 def stats_summary(conn):

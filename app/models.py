@@ -28,3 +28,17 @@ class AuthorNatIn(BaseModel):
     作者行跨书共享，改动全局生效。"""
     nationalities: Dict[str, List[str]]
 
+
+class DimOp(BaseModel):
+    """字典维护（改名/合并、删除）。dim 取值见 db._DIMS + "nationality"；
+    nationality 没有词表行，改的是挂在作者身上的文本值。"""
+    dim: str
+    name: str
+
+
+class DimRename(BaseModel):
+    """改名：new 已存在则合并过去（旧值删掉、关联改指新行），否则原地改名。"""
+    dim: str
+    old: str
+    new: str
+

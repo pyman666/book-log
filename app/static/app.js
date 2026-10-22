@@ -498,6 +498,7 @@ const _icon = path => `<svg viewBox="0 0 20 20" fill="none" stroke="currentColor
 const ICON = {
   home: _icon('<path d="M4 4.6h4.6v4.6H4zM11.4 4.6H16v4.6h-4.6zM4 11.4h4.6V16H4zM11.4 11.4H16V16h-4.6z"/>'),
   books: _icon('<path d="M10 6.2c-1.1-.9-2.6-1.4-5.3-1.4v9.4c2.7 0 4.2.5 5.3 1.4 1.1-.9 2.6-1.4 5.3-1.4V4.8c-2.7 0-4.2.5-5.3 1.4ZM10 6.2v9.4"/>'),
+  shelf: _icon('<path d="M3 4.6h14M3 10h14M3 15.4h14M7.4 5v5M7.4 10.4V15M12.6 5v5M12.6 10.4V15"/>'),
   export: _icon('<path d="M10 3.5v8.4m0 0 3.2-3.2M10 11.9 6.8 8.7M4.2 15.5v1.2h11.6v-1.2"/>'),
   plus: _icon('<path d="M10 4.5v11M4.5 10h11"/>'),
   trash: _icon('<path d="M4.5 6h11M8 6V4.2h4V6M6.2 6l.7 10h6.2l.7-10M8.6 9v4.2M11.4 9v4.2"/>'),
@@ -508,6 +509,7 @@ const ICON = {
 const RAIL_NAV = [
   { href: "#/", title: "仪表盘", icon: ICON.home },
   { href: "#/books", title: "书单", icon: ICON.books },
+  { href: "#/dims", title: "字典", icon: ICON.shelf },
   { href: "#/trash", title: "回收站", icon: ICON.trash },
 ];
 const BOOK_ACTIONS = [
@@ -519,7 +521,7 @@ function renderRail(actions = []) {
   if (!rail) return;
   const h = location.hash || "#/";
   const cur = h.startsWith("#/book/") || h === "#/books" || h.startsWith("#/books?")
-    ? "#/books" : h === "#/trash" ? "#/trash" : "#/";
+    ? "#/books" : h === "#/dims" ? "#/dims" : h === "#/trash" ? "#/trash" : "#/";
   rail.innerHTML = `
     ${RAIL_NAV.map(n => `<a class="fab nav${n.href === cur ? " on" : ""}" href="${n.href}"
       title="${n.title}" aria-label="${n.title}"${n.href === cur ? ' aria-current="page"' : ""}>${n.icon}</a>`).join("")}
@@ -1374,6 +1376,150 @@ async function trashView() {
   });
 }
 
+// ---------- 字典：维护作者 / 标签 / 分类等词表值（改名=合并，删除=解绑） ----------
+// facets 只回「挂到书上的值」，拼错值没人引用时根本看不见，所以这里连孤立行（count=0）
+// 一起列出来——它们才是最像拼错的候选。书单页只往书上加值，错字只能改库；这里补齐改名。
+// 一次只看一个维度（标签切换），不把 6 块铺满整页。
+const DIM_ORDER = [["authors", "作者"], ["tags", "标签"], ["categories", "分类"],
+  ["publishers", "出版社"], ["platforms", "平台"], ["nationalities", "国籍"]];
+const DIM_LABEL = Object.fromEntries(DIM_ORDER);
+const DIM_UNIT = Object.fromEntries(DIM_ORDER.map(([k, l]) => [k, l === "国籍" ? "作者" : "本"]));
+
+async function entriesView() {
+  let INV = await api("/api/dims");
+  const Q = {};                        // 每个维度记住自己的搜索词，切走再切回来还在
+  let dim = "authors", orphansOnly = false, editing = null;   // editing = 正在改的那个值
+  view.innerHTML = `
+    <div class="toolbar">
+      <div class="ent-tabs" id="d-tabs"></div>
+      <button id="d-orphans" type="button">只看没人用的</button>
+    </div>
+    <div id="d-lists"></div>`;
+  const render = () => {
+    $("#d-tabs").innerHTML = DIM_ORDER.map(([k, l]) => `
+      <button class="tab${k === dim ? " on" : ""}" type="button" data-tab="${k}">${l}
+        <span class="c">${(INV[k] || []).length}</span></button>`).join("");
+    $("#d-lists").innerHTML = `
+      <section class="panel ent"
+        title="改一个值＝把它并入另一个：新值已存在就合并（旧值删掉、书目改指新值），不存在就原地改名。删除只解绑，书目和 raw/books/ 正文都不动。">
+        <h2>
+          <span class="t">${DIM_LABEL[dim]}</span>
+          <span class="hint"></span>
+          <input class="right ent-q" data-q="${dim}" placeholder="搜${DIM_LABEL[dim]}"
+            value="${esc(Q[dim] || "")}">
+        </h2>
+        <table class="ent-t"><colgroup>
+          <col style="width:58%"><col style="width:20%"><col style="width:22%">
+        </colgroup><thead><tr><th>名称</th><th>书目</th><th>操作</th></tr></thead><tbody>
+          ${(INV[dim] || []).map(x => {
+            const on = editing === x.name;
+            return `<tr data-name="${esc(x.name)}" data-count="${x.count}">
+              <td class="nm">${on
+                ? `<input class="ent-edit" value="${esc(x.name)}">`
+                : `<button class="ent-nm" type="button" title="改名 / 合并进已有的值">${esc(x.name)}</button>`}</td>
+              <td class="n">${x.count} <span class="u">${DIM_UNIT[dim]}</span></td>
+              <td class="a">${on
+                ? `<button class="primary" data-act="save" type="button">保存</button>
+                   <button data-act="cancel" type="button">取消</button>`
+                : `<button data-act="edit" type="button">改名</button>`}
+                <button class="danger" data-act="del" type="button">删除</button></td>
+            </tr>`;
+          }).join("")}
+          <tr class="ent-empty" hidden><td colspan="3"></td></tr>
+        </tbody></table>
+      </section>`;
+    applyFilter();
+  };
+  // 过滤只改行的显隐（不重绘），搜索框才不会被自己重建掉、丢焦点
+  const applyFilter = () => {
+    const items = INV[dim] || [], q = (Q[dim] || "").toLowerCase();
+    let shown = 0;
+    view.querySelectorAll(".ent-t tbody tr").forEach(tr => {
+      if (tr.classList.contains("ent-empty")) return;
+      const hit = (!orphansOnly || Number(tr.dataset.count) === 0)
+        && (!q || tr.dataset.name.toLowerCase().includes(q));
+      tr.hidden = !hit;
+      if (hit) shown++;
+    });
+    view.querySelector(".ent .hint").textContent = `${shown} / ${items.length} 个`;
+    const empty = view.querySelector(".ent-empty");
+    empty.querySelector("td").textContent = orphansOnly
+      ? `「${DIM_LABEL[dim]}」没有没人用的值。`
+      : (q ? `没有匹配「${Q[dim]}」的${DIM_LABEL[dim]}。` : `还没有${DIM_LABEL[dim]}，在书单里填了就出现在这里。`);
+    empty.hidden = shown !== 0;
+  };
+  const refresh = async () => { INV = await api("/api/dims"); render(); };
+  const submit = async (inp, tr) => {
+    const v = inp.value.trim(), name = tr.dataset.name;
+    if (!v || v === name) { editing = null; render(); return; }
+    try {
+      const r = await api("/api/dims/rename",
+        { method: "POST", body: JSON.stringify({ dim, old: name, new: v }) });
+      toast(r.merged ? `已合并进「${r.name}」，${r.books} ${DIM_UNIT[dim]}已改指过去`
+                     : `「${name}」已改为「${r.name}」`);
+    } catch (err) { toast(err.message, true); return; }
+    await refresh();
+  };
+  const del = async (btn, tr) => {
+    const name = tr.dataset.name, count = Number(tr.dataset.count);
+    if (!confirm(count
+        ? `把「${name}」从 ${count} ${DIM_UNIT[dim]}上删掉？书目还在，只是这一栏少一个值。`
+        : `删掉没人用的「${name}」？`)) return;
+    btn.disabled = true;
+    try {
+      await api("/api/dims/delete", { method: "POST", body: JSON.stringify({ dim, name }) });
+      toast(count ? `已删除「${name}」，${count} ${DIM_UNIT[dim]}已解绑` : `已删除「${name}」`);
+      await refresh();
+    } catch (err) { btn.disabled = false; toast(err.message, true); }
+  };
+  $("#d-tabs").addEventListener("click", e => {
+    const btn = e.target.closest("button[data-tab]");
+    if (!btn) return;
+    dim = btn.dataset.tab;
+    editing = null;
+    render();
+  });
+  $("#d-lists").addEventListener("click", e => {
+    const btn = e.target.closest("button[data-act]");
+    if (!btn || !$("#d-lists").contains(btn)) return;   // 已重绘过就认旧点击
+    const tr = btn.closest("tr");
+    const act = btn.dataset.act;
+    if (act === "cancel") { editing = null; render(); return; }
+    if (act === "edit") {
+      editing = tr.dataset.name;
+      render();
+      const inp = $("#d-lists").querySelector(".ent-edit");
+      if (inp) { inp.focus(); inp.select(); }
+      return;
+    }
+    if (act === "save") { submit($("#d-lists").querySelector(".ent-edit"), tr); return; }
+    del(btn, tr);
+  });
+  $("#d-lists").addEventListener("keydown", e => {
+    const inp = e.target.closest(".ent-edit");
+    if (!inp) return;
+    if (e.key === "Enter") { e.preventDefault(); submit(inp, inp.closest("tr")); }
+    else if (e.key === "Escape") { editing = null; render(); }
+  });
+  $("#d-lists").addEventListener("input", e => {
+    const q = e.target.dataset.q;
+    if (!q) return;
+    Q[q] = e.target.value.trim();
+    applyFilter();
+  });
+  $("#d-lists").addEventListener("blur", e => {
+    const inp = e.target.closest && e.target.closest(".ent-edit");
+    if (!inp || e.target !== inp) return;     // 点走才算失焦：Enter 之后 input 已被移除
+    submit(inp, inp.closest("tr"));
+  }, true);
+  $("#d-orphans").addEventListener("click", e => {
+    orphansOnly = !orphansOnly;
+    e.currentTarget.textContent = orphansOnly ? "看全部" : "只看没人用的";
+    applyFilter();
+  });
+  render();
+}
+
 // ---------- 路由 & 全局按钮 ----------
 function route() {
   const h = location.hash || "#/";
@@ -1382,6 +1528,7 @@ function route() {
   renderRail(onBooks ? BOOK_ACTIONS : []);   // 导航按钮每页都在，书单页多加三个操作
   if (m) bookDetail(m[1]);
   else if (onBooks) { filtersFromHash(h); booksView(); }
+  else if (h === "#/dims") entriesView();
   else if (h === "#/trash") trashView();
   else dashboard();
 }
