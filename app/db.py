@@ -33,25 +33,27 @@ CREATE TABLE IF NOT EXISTS books (
   -- category/platform 为多对多（book_categories / book_platforms）：一本书可有买入/售出多个平台
   -- 无唯一约束：售出书 created 同为 NULL，同书名多批次只能靠应用层规则去重
 );
+-- 维度侧外键同样 ON DELETE CASCADE：正常删除走 delete_dim（先摘关联、再删词表行），
+-- 级联只是兜底——顺序写反或有人直接删词表行时，关联跟着走，不会留下指向空行的半截数据
 CREATE TABLE IF NOT EXISTS book_authors (
   book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
-  author_id INTEGER REFERENCES authors(id),
+  author_id INTEGER REFERENCES authors(id) ON DELETE CASCADE,
   PRIMARY KEY (book_id, author_id));
 CREATE TABLE IF NOT EXISTS book_publishers (
   book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
-  publisher_id INTEGER REFERENCES publishers(id),
+  publisher_id INTEGER REFERENCES publishers(id) ON DELETE CASCADE,
   PRIMARY KEY (book_id, publisher_id));
 CREATE TABLE IF NOT EXISTS book_categories (
   book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
-  category_id INTEGER REFERENCES categories(id),
+  category_id INTEGER REFERENCES categories(id) ON DELETE CASCADE,
   PRIMARY KEY (book_id, category_id));
 CREATE TABLE IF NOT EXISTS book_platforms (
   book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
-  platform_id INTEGER REFERENCES platforms(id),
+  platform_id INTEGER REFERENCES platforms(id) ON DELETE CASCADE,
   PRIMARY KEY (book_id, platform_id));
 CREATE TABLE IF NOT EXISTS book_tags (
   book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
-  tag_id INTEGER REFERENCES tags(id),
+  tag_id INTEGER REFERENCES tags(id) ON DELETE CASCADE,
   PRIMARY KEY (book_id, tag_id));
 -- 回收站：删除 = 快照进这里再从 books 摘走（不是物理删）。快照是 _shape 的全量 JSON，
 -- 恢复时按快照重建；不存外键，免得恢复前维度行被清掉就还原不出来
@@ -160,6 +162,7 @@ def init_db(conn):
     conn.execute("CREATE INDEX IF NOT EXISTS ix_book_read_at ON books(read_at)")
     _migrate_read_at(conn)
     _migrate_iso_dates(conn)
+    _migrate_fk_cascade(conn)
     if "cover_url" in cols:  # 封面已改为“磁盘文件存在性”，废弃 cover_url 列（douban_id 为真源）
         conn.execute("ALTER TABLE books DROP COLUMN cover_url")
     if "file_path" in cols:  # 笔记文件名改为按命名法推导（app/notes.py），不再入库：
@@ -182,9 +185,10 @@ def init_db(conn):
 
 
 # user_version 迁移位图：v2 = 已收敛 read_at 的 created 回填（只留打过分的书）；
-# v3 = 三列日期 Notion 串 → ISO
+# v3 = 三列日期 Notion 串 → ISO；v4 = 关联表维度外键补 ON DELETE CASCADE
 _READ_AT_CLEANED = 2
 _ISO_DATES = 3
+_FK_CASCADE = 4
 
 
 def _migrate_iso_dates(conn):
@@ -201,6 +205,41 @@ def _migrate_iso_dates(conn):
                 conn.execute(f"UPDATE books SET {col} = ? WHERE id = ?",
                              (k if wide else k[:10], rid))
     conn.execute(f"PRAGMA user_version = {_ISO_DATES}")
+
+
+def _fk_cascades(conn, table, fk):
+    """关联表该外键是否已声明 ON DELETE CASCADE（存量库没有）。"""
+    return any((r["on_delete"] or "").upper() == "CASCADE"
+               for r in conn.execute(f"PRAGMA foreign_key_list({table})") if r["from"] == fk)
+
+
+def _migrate_fk_cascade(conn):
+    """v4：关联表指向维度行的外键补 ON DELETE CASCADE（book_id 侧早就是了）。
+
+    正常删除走 delete_dim：先摘关联行、再删词表行，顺序对了根本用不上级联；级联是兜底，
+    免得哪天某条路径顺序写反、或有人在库里直接删词表行，撞上外键约束留下半截数据。
+    CREATE TABLE IF NOT EXISTS 改不了存量表的定义，只能重建：建新表 → 拷数据 → 换名。
+    旧库若有 (book_id, NULL) 的幽灵行照原样搬过去（那儿没外键可指，清理是 _replace_m2m 的活）。
+    索引随旧表一起被 DROP，换名后重建。"""
+    if conn.execute("PRAGMA user_version").fetchone()[0] >= _FK_CASCADE:
+        return
+    for table, _, parent, fk in _M2M:
+        if _fk_cascades(conn, table, fk):
+            continue
+        tmp = f"{table}_v4"
+        conn.execute(f"DROP TABLE IF EXISTS {tmp}")
+        conn.execute(f"CREATE TABLE {tmp} ("
+                     f"book_id INTEGER REFERENCES books(id) ON DELETE CASCADE, "
+                     f"{fk} INTEGER REFERENCES {parent}(id) ON DELETE CASCADE, "
+                     f"PRIMARY KEY (book_id, {fk}))")
+        conn.execute(f"INSERT INTO {tmp} (book_id, {fk}) SELECT book_id, {fk} FROM {table}")
+        conn.execute(f"DROP TABLE {table}")
+        conn.execute(f"ALTER TABLE {tmp} RENAME TO {table}")
+    for name, table, fk in (("ix_bookcat_category", "book_categories", "category_id"),
+                            ("ix_bookplat_platform", "book_platforms", "platform_id"),
+                            ("ix_booktag_tag", "book_tags", "tag_id")):
+        conn.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table}({fk})")
+    conn.execute(f"PRAGMA user_version = {_FK_CASCADE}")
 
 
 def _migrate_read_at(conn):
@@ -259,6 +298,9 @@ def _replace_m2m(conn, bid, b):
     for table, key, dim_table, fk in _M2M:
         conn.execute(f"DELETE FROM {table} WHERE book_id = ?", (bid,))
         for name in b.get(key) or []:
+            name = (name or "").strip()   # 空值/纯空白不是维度值：跳过，否则 _dim 返回 None，
+            if not name:                  # 会落一行 (book_id, NULL) 的幽灵关联（SQLite 行式表
+                continue                  # 允许主键列 NULL，读侧 JOIN 不到，纯脏数据）
             conn.execute(f"INSERT OR IGNORE INTO {table} (book_id, {fk}) VALUES (?, ?)",
                          (bid, _dim(conn, dim_table, name)))
 

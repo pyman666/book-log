@@ -1,6 +1,10 @@
 """字典维护：作者/标签/分类等词表的改名（含合并）与删除，不用改库。"""
+import sqlite3
+
+import pytest
 from fastapi.testclient import TestClient
 
+from app.db import _DIMS
 from app.main import create_app
 
 
@@ -64,6 +68,29 @@ def test_delete_unbinds_but_keeps_the_book(tmp_path):
     assert c.get("/api/facets").json()["tags"] == ["长读"]
     # 删完的不能再删，也不该 404 之外的状态
     assert c.post("/api/dims/delete", json={"dim": "tags", "name": "重读"}).status_code == 400
+
+
+@pytest.mark.parametrize("dim", sorted(_DIMS))
+def test_delete_any_dim_unbinds_without_leaving_an_empty_id(tmp_path, dim):
+    """字典页删值（作者/出版社/分类/平台/标签同一套 delete_dim）：关联行整行摘掉，
+    不是留一个空 id——书还在，只是少了这一栏。词表行与关联行都不留 NULL / 悬空引用。"""
+    c = client(tmp_path)
+    bid = c.post("/api/books", json={"title": "甲", dim: ["甲值", "乙值"]}).json()
+    assert c.post("/api/dims/delete",
+                  json={"dim": dim, "name": "甲值"}).json() == {"name": "甲值", "books": 1}
+
+    b = c.get(f"/api/books/{bid}").json()
+    assert b[dim] == ["乙值"]
+    assert c.get("/api/facets").json()[dim] == ["乙值"]
+    assert [x["name"] for x in c.get("/api/dims").json()[dim]] == ["乙值"]
+
+    table, join, fk = _DIMS[dim]
+    with sqlite3.connect(tmp_path / "t.db") as conn:
+        assert conn.execute(
+            f"SELECT COUNT(*) FROM {join} WHERE {fk} IS NULL").fetchone()[0] == 0
+        assert conn.execute(
+            f"SELECT COUNT(*) FROM {join} j LEFT JOIN {table} d ON d.id = j.{fk} "
+            f"WHERE d.id IS NULL").fetchone()[0] == 0
 
 
 def test_delete_author_drops_its_nationalities(tmp_path):

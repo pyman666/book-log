@@ -1,6 +1,6 @@
 from app import db as dbmod
-from app.db import (get_db, get_book, init_db, list_books, save_book, stats_group,
-                    stats_summary, update_book)
+from app.db import (get_db, get_book, init_db, insert_book, list_books, save_book,
+                    stats_group, stats_summary, update_book)
 
 
 def make(tmp_path):
@@ -75,6 +75,83 @@ def test_author_can_have_multiple_nationalities(tmp_path):
     assert list_books(conn, nationality="法国")["total"] == 1
     assert dbmod.facets(conn)["author_nationalities"] == {"某人": ["中国", "法国"]}
     assert {x["key"] for x in stats_group(conn, "nationality")} == {"中国", "法国"}
+
+
+def test_blank_dim_value_is_skipped_not_a_null_link(tmp_path):
+    """固定逻辑对全部维度生效：空值/纯空白在写入时跳过（作者/出版社/分类/平台/标签）。
+    否则 _dim 返回 NULL，关联表多一行 (book_id, NULL)——SQLite 行式表允许主键列 NULL，
+    读侧 JOIN 不到，纯脏数据。"""
+    conn = make(tmp_path)
+    values = {"authors": ["", "   "], "publishers": [" "], "categories": ["", "   ", "小说"],
+              "platforms": ["", "京东"], "tags": ["", "重读"]}
+    bid = insert_book(conn, B(title="甲", **values))
+    for table, _, _, fk in dbmod._M2M:
+        assert conn.execute(
+            f"SELECT COUNT(*) FROM {table} WHERE {fk} IS NULL").fetchone()[0] == 0, table
+    # 空白值连词表行都不该建
+    dims = {t: [r[0] for r in conn.execute(f"SELECT name FROM {t} ORDER BY id")]
+            for t in ("authors", "publishers", "categories", "platforms", "tags")}
+    assert dims == {"authors": [], "publishers": [], "categories": ["小说"],
+                    "platforms": ["京东"], "tags": ["重读"]}
+    got = get_book(conn, bid)
+    assert got["authors"] == [] and got["publishers"] == []
+    assert got["categories"] == ["小说"] and got["platforms"] == ["京东"] and got["tags"] == ["重读"]
+
+
+def test_join_tables_cascade_from_dim_deletes(tmp_path):
+    """五张关联表的维度外键都带 ON DELETE CASCADE：就算绕过 delete_dim 直接删词表行，
+    关联也跟着走，不会留下指向空行的半截数据。"""
+    conn = make(tmp_path)
+    bid = save_book(conn, B(title="甲", authors=["某人"], publishers=["某社"], categories=["小说"],
+                            platforms=["京东"], tags=["重读"]))
+    for table, _, _, fk in dbmod._M2M:
+        fks = {r["from"]: r["on_delete"]
+               for r in conn.execute(f"PRAGMA foreign_key_list({table})")}
+        assert fks[fk] == "CASCADE", (table, fks)
+
+    for table in ("authors", "publishers", "categories", "platforms", "tags"):
+        conn.execute(f"DELETE FROM {table}")
+    conn.commit()
+    for table, _, _, _ in dbmod._M2M:
+        assert conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0, table
+    b = get_book(conn, bid)
+    assert b["authors"] == [] and b["publishers"] == [] and b["categories"] == []
+
+
+def test_v4_migration_adds_cascade_to_legacy_join_tables(tmp_path):
+    """存量库的关联表只级联 book_id，删词表行会被外键拦住：v4 重建补上。
+    数据（含历史 (book_id, NULL) 幽灵行）、索引、user_version 都要对齐；再跑一次是空操作。"""
+    conn = make(tmp_path)
+    bid = save_book(conn, B(title="甲", categories=["小说"]))
+    conn.execute("INSERT INTO book_categories (book_id, category_id) VALUES (?, NULL)", (bid,))
+    conn.executescript("""
+        CREATE TABLE book_categories_old (
+          book_id INTEGER REFERENCES books(id) ON DELETE CASCADE,
+          category_id INTEGER REFERENCES categories(id),
+          PRIMARY KEY (book_id, category_id));
+        INSERT INTO book_categories_old SELECT book_id, category_id FROM book_categories;
+        DROP TABLE book_categories;
+        ALTER TABLE book_categories_old RENAME TO book_categories;
+    """)                                                     # 退回旧定义（索引随 DROP 一起没了）
+    conn.execute("PRAGMA user_version = 3")
+    conn.commit()
+
+    init_db(conn)
+    fks = {r["from"]: r["on_delete"]
+           for r in conn.execute("PRAGMA foreign_key_list(book_categories)")}
+    assert fks == {"book_id": "CASCADE", "category_id": "CASCADE"}
+    assert conn.execute("SELECT COUNT(*) FROM book_categories").fetchone()[0] == 2   # 幽灵行照搬
+    assert "ix_bookcat_category" in [r[1] for r in conn.execute("PRAGMA index_list(book_categories)")]
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == dbmod._FK_CASCADE
+    assert not conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE name = 'book_categories_v4'").fetchone()
+
+    init_db(conn)                                            # 幂等：版本已到位，不再重建
+    assert conn.execute("SELECT COUNT(*) FROM book_categories").fetchone()[0] == 2
+
+    conn.execute("DELETE FROM categories")                   # 级联真的生效了
+    conn.commit()
+    assert conn.execute("SELECT COUNT(*) FROM book_categories").fetchone()[0] == 1   # 只剩幽灵行
 
 
 def test_read_at_has_no_default(tmp_path):
@@ -297,7 +374,7 @@ def test_migrate_iso_dates_v3(tmp_path):
     assert r["created"] == "2024-04-27 11:32"
     assert r["read_at"] == "2024-05-02"
     assert r["last_modified"] == "2025-06-01 08:05"
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 3
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == dbmod._FK_CASCADE  # 顺手升到最新
 
 
 def test_sort_by_read_at_mixes_date_only_and_timestamped(tmp_path):
